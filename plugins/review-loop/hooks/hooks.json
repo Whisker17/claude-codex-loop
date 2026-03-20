@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "plugins/review-loop/scripts/kill-review.sh --from-hook"
+          }
+        ]
+      }
+    ]
+  }
+}
