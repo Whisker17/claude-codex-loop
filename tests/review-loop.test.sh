@@ -2,6 +2,8 @@
 
 set -uo pipefail
 
+unset REVIEW_LOOP_PROJECT_ROOT 2>/dev/null || true
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FAILURES=0
 TMP_DIRS=()
@@ -83,6 +85,25 @@ assert_not_contains() {
   fi
 }
 
+assert_contains_in_order() {
+  local path="$1"
+  shift
+
+  local last_line=0
+  local needle
+  local line
+
+  for needle in "$@"; do
+    line="$(grep -Fn "$needle" "$path" | head -n 1 | cut -d: -f1)"
+    [[ -n "$line" ]] || fail "expected [$needle] in $path" || return 1
+    if (( line <= last_line )); then
+      fail "expected [$needle] after line $last_line in $path"
+      return 1
+    fi
+    last_line="$line"
+  done
+}
+
 assert_equals() {
   local expected="$1"
   local actual="$2"
@@ -120,7 +141,7 @@ setup_project() {
   mkdir -p "$project_root/.claude" "$project_root/specs/reviews/design" "$project_root/specs/reviews/code"
 
   write_file "$project_root/specs/design.md" $'# Design\n\nReview loop design content.\n'
-  write_file "$project_root/.claude/review-loop.local.md" $'---\nactive: true\nsession_id: test-session\nphase: design\nround: 1\nstarted_at: 2026-03-20T00:00:00Z\nbranch: review-loop/test-session\nbaseline_sha: ""\ntask: "Implement review loop"\n---\n'
+  write_file "$project_root/.claude/review-loop.local.md" $'---\nactive: true\nsession_id: test-session\nphase: design\nround: 1\nstarted_at: 2026-03-20T00:00:00Z\nbranch: review-loop/test-session\nstart_branch: main\nstart_sha: abc123\nbaseline_sha: ""\nbrainstorm_done: false\ntask: "Implement review loop"\n---\n'
 
   printf '%s\n' "$project_root"
 }
@@ -250,31 +271,81 @@ test_required_files_exist() {
   assert_executable "$REPO_ROOT/review-loop/scripts/kill-review.sh" || return 1
 }
 
-test_review_command_describes_two_stage_flow() {
+build_prompt_to_file() {
+  local project_root="$1"
+  local mode="$2"
+  local round="$3"
+  local output_path="$4"
+
+  (
+    cd "$project_root" || exit 1
+    REVIEW_LOOP_PROJECT_ROOT="$project_root"
+    source "$REPO_ROOT/review-loop/scripts/common.sh"
+    review_loop::build_prompt "$mode" "$round" > "$output_path"
+  ) || return 1
+}
+
+test_review_command_documents_v21_flow() {
   local path="$REPO_ROOT/review-loop/commands/review-loop.md"
   assert_file_exists "$path" || return 1
 
+  assert_contains "$path" "description: Drive the review-loop v2.1 design and code collaboration flow" || return 1
+  assert_contains "$path" "## Brainstorming (optional)" || return 1
+  assert_contains "$path" "brainstorm_done: true" || return 1
+  assert_contains "$path" "run-review-bg.sh design-review verify" || return 1
+  assert_contains "$path" "round-verify-codex-review.md" || return 1
+  assert_contains "$path" "round-verify-claude-review.md" || return 1
+  assert_contains "$path" "phase: design    # design | code | done" || return 1
+  assert_contains "$path" "start_branch: main" || return 1
+  assert_contains "$path" "brainstorm_done: false" || return 1
   assert_contains "$path" "Design stage complete. Review specs/design.md and confirm." || return 1
   assert_contains "$path" "Implementation complete. All changes on branch review-loop/" || return 1
   assert_contains "$path" "run-review-bg.sh" || return 1
   assert_contains "$path" "check-review.sh" || return 1
-  assert_contains "$path" "git add -A -- ':!specs/reviews/' ':!.claude/'" || return 1
+  assert_contains "$path" "git add specs/brainstorm.md" || return 1
+  assert_contains "$path" "git add -A -- ':!specs/reviews/' ':!specs/brainstorm.md' ':!.claude/'" || return 1
 }
 
-test_cancel_command_and_hook_are_cleanup_only() {
+test_cancel_command_restores_starting_point_and_hook_stays_cleanup_only() {
   local command_path="$REPO_ROOT/review-loop/commands/cancel-review.md"
   local hook_path="$REPO_ROOT/review-loop/hooks/hooks.json"
 
   assert_file_exists "$command_path" || return 1
   assert_file_exists "$hook_path" || return 1
 
+  assert_contains_in_order \
+    "$command_path" \
+    '1. Read `.claude/review-loop.local.md` and extract `session_id`, `start_branch`, and `start_sha`.' \
+    '2. Run `review-loop/scripts/kill-review.sh <session_id>`.' \
+    '3. Discard uncommitted changes: `git reset -- . && git checkout -- . && git clean -fd`.' \
+    '4. Restore starting point:' \
+    '5. Delete the session branch: `git branch -D review-loop/<session-id>`.' \
+    '6. Tell the user that session work has been discarded.' || return 1
   assert_contains "$command_path" "kill-review.sh" || return 1
-  assert_contains "$command_path" "review-loop.local.md" || return 1
+  assert_contains "$command_path" 'git checkout <start_branch>' || return 1
+  assert_contains "$command_path" 'git checkout --detach <start_sha>' || return 1
   assert_contains "$hook_path" "Stop" || return 1
   assert_contains "$hook_path" "kill-review.sh" || return 1
   assert_not_contains "$hook_path" "run-review-bg.sh" || return 1
   assert_not_contains "$hook_path" "\"matcher\"" || return 1
   assert_not_contains "$hook_path" "CLAUDE_PLUGIN_ROOT" || return 1
+}
+
+test_prompts_and_agents_document_v21_constraints() {
+  local design_prompt="$REPO_ROOT/review-loop/prompts/design-review.md"
+  local code_implement_prompt="$REPO_ROOT/review-loop/prompts/code-implement.md"
+  local code_fix_prompt="$REPO_ROOT/review-loop/prompts/code-fix.md"
+  local agents_path="$REPO_ROOT/review-loop/AGENTS.md"
+
+  assert_contains "$design_prompt" "CRITICAL: Every round is a full audit." || return 1
+  assert_contains "$design_prompt" "Interface consistency: naming, payload shapes, list/detail parity" || return 1
+  assert_contains "$design_prompt" "For verify rounds (no prior context): report all findings as fresh" || return 1
+  assert_contains "$code_implement_prompt" "Do not invoke brainstorming skills." || return 1
+  assert_contains "$code_fix_prompt" "Do not invoke brainstorming skills." || return 1
+  assert_contains "$agents_path" "optional three-stage workflow" || return 1
+  assert_contains "$agents_path" "## Brainstorming stage (optional)" || return 1
+  assert_contains "$agents_path" "Verify rounds receive no prior review context to ensure fresh perspective." || return 1
+  assert_contains "$agents_path" "Final verification is Claude-only (no Codex invocation)." || return 1
 }
 
 test_run_review_bg_design_review_injects_context() {
@@ -412,8 +483,10 @@ test_run_review_bg_code_fix_and_verify_contexts() {
   ) || return 1
 
   wait_for_file_content "$sentinel" "done" || return 1
-  assert_contains "$prompt_capture" "Verify round 1 review." || return 1
-  assert_contains "$prompt_capture" "Verify round 1 response." || return 1
+  assert_contains_in_order "$prompt_capture" "FULL INDEPENDENT REVIEW" "## Design Document" || return 1
+  assert_not_contains "$prompt_capture" "## Previous Codex Review" || return 1
+  assert_not_contains "$prompt_capture" "Verify round 1 review." || return 1
+  assert_not_contains "$prompt_capture" "Verify round 1 response." || return 1
   assert_contains "$prompt_capture" "specs/reviews/design/round-verify-codex-review.md" || return 1
 }
 
@@ -441,6 +514,52 @@ test_run_review_bg_code_implement_uses_design_only() {
   wait_for_file_content "$sentinel" "done" || return 1
   assert_contains "$prompt_capture" "Review loop design content." || return 1
   assert_not_contains "$prompt_capture" "Should not be injected." || return 1
+}
+
+test_design_review_verify_prompt_no_prior_context() {
+  local project_root
+  local prompt_path
+
+  project_root="$(setup_project)"
+  prompt_path="$project_root/.claude/verify-prompt.md"
+
+  write_file "$project_root/specs/reviews/design/round-1-codex-review.md" $'Round 1 review.\n'
+  write_file "$project_root/specs/reviews/design/round-1-claude-response.md" $'Round 1 response.\n'
+
+  build_prompt_to_file "$project_root" design-review verify "$prompt_path" || return 1
+
+  assert_contains_in_order "$prompt_path" "FULL INDEPENDENT REVIEW" "## Design Document" || return 1
+  assert_contains "$prompt_path" "specs/reviews/design/round-verify-codex-review.md" || return 1
+  assert_not_contains "$prompt_path" "## Previous Codex Review" || return 1
+  assert_not_contains "$prompt_path" "## Previous Claude Response" || return 1
+  assert_not_contains "$prompt_path" "Round 1 review." || return 1
+  assert_not_contains "$prompt_path" "Round 1 response." || return 1
+}
+
+test_design_review_regular_prompt_includes_prior_context() {
+  local project_root
+  local prompt_path
+
+  project_root="$(setup_project)"
+  prompt_path="$project_root/.claude/round-2-prompt.md"
+
+  write_file "$project_root/specs/reviews/design/round-1-codex-review.md" $'Round 1 review.\n'
+  write_file "$project_root/specs/reviews/design/round-1-claude-response.md" $'Round 1 response.\n'
+
+  build_prompt_to_file "$project_root" design-review 2 "$prompt_path" || return 1
+
+  assert_contains "$prompt_path" "## Previous Codex Review" || return 1
+  assert_contains "$prompt_path" "## Previous Claude Response" || return 1
+  assert_contains "$prompt_path" "Round 1 review." || return 1
+  assert_contains "$prompt_path" "Round 1 response." || return 1
+}
+
+test_brainstorm_md_protected_in_code_stage_exclusions() {
+  local path="$REPO_ROOT/review-loop/commands/review-loop.md"
+
+  assert_contains "$path" 'Protected paths: `specs/design.md`, `specs/brainstorm.md`, everything under' || return 1
+  assert_contains "$path" "git add -A -- ':!specs/reviews/' ':!specs/brainstorm.md' ':!.claude/'" || return 1
+  assert_contains "$path" "git diff --staged \$BASELINE_SHA -- ':!specs/reviews/' ':!specs/brainstorm.md' ':!.claude/'" || return 1
 }
 
 test_check_review_reports_expected_statuses() {
@@ -650,14 +769,18 @@ test_kill_review_from_hook_cleans_state_and_prompt_files() {
 
 main() {
   run_test "required files exist" test_required_files_exist
-  run_test "review command documents two-stage flow" test_review_command_describes_two_stage_flow
-  run_test "cancel command and hook stay cleanup-only" test_cancel_command_and_hook_are_cleanup_only
+  run_test "review command documents v2.1 flow" test_review_command_documents_v21_flow
+  run_test "cancel command restores the starting point and hook stays cleanup-only" test_cancel_command_restores_starting_point_and_hook_stays_cleanup_only
+  run_test "prompts and agents document v2.1 constraints" test_prompts_and_agents_document_v21_constraints
   run_test "run-review-bg injects context and writes artifacts" test_run_review_bg_design_review_injects_context
   run_test "run-review-bg discovers the project root and precreates output directories" test_run_review_bg_precreates_output_directory_and_discovers_project_root
   run_test "run-review-bg writes failed sentinel on codex errors" test_run_review_bg_writes_failed_sentinel_on_nonzero_exit
   run_test "run-review-bg fails fast when the launcher never writes a pid file" test_run_review_bg_fails_fast_when_launcher_never_writes_pid
   run_test "run-review-bg builds code-fix and verify prompts correctly" test_run_review_bg_code_fix_and_verify_contexts
   run_test "run-review-bg keeps code-implement context scoped to the design" test_run_review_bg_code_implement_uses_design_only
+  run_test "design-review verify prompt strips prior context" test_design_review_verify_prompt_no_prior_context
+  run_test "design-review regular prompt keeps prior context" test_design_review_regular_prompt_includes_prior_context
+  run_test "brainstorm output stays protected during code-stage staging" test_brainstorm_md_protected_in_code_stage_exclusions
   run_test "check-review returns running, timeout, failed, and done" test_check_review_reports_expected_statuses
   run_test "kill-review stops the background session" test_kill_review_terminates_session_and_cleans_runtime_files
   run_test "kill-review --from-hook cleans state and prompt files" test_kill_review_from_hook_cleans_state_and_prompt_files
