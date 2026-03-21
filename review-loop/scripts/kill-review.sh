@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=plugins/review-loop/scripts/common.sh
+# shellcheck source=review-loop/scripts/common.sh
 source "$SCRIPT_DIR/common.sh"
 
 SESSION_ID="${1:-}"

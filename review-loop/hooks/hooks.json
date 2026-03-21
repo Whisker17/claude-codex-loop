@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "plugins/review-loop/scripts/kill-review.sh --from-hook"
+            "command": "review-loop/scripts/kill-review.sh --from-hook"
           }
         ]
       }

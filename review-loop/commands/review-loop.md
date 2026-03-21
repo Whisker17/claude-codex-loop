@@ -48,8 +48,8 @@ Required error messages:
      PRE_UNTRACKED=$(git ls-files --others --exclude-standard)
      ```
 
-   - Execute `plugins/review-loop/scripts/run-review-bg.sh design-review <round>`.
-   - Poll every 10 seconds with `plugins/review-loop/scripts/check-review.sh`.
+   - Execute `review-loop/scripts/run-review-bg.sh design-review <round>`.
+   - Poll every 10 seconds with `review-loop/scripts/check-review.sh`.
    - Revert any unauthorized file deltas after Codex completes, times out, or fails by comparing:
 
      ```bash
@@ -87,8 +87,8 @@ After confirmation:
 ## Code stage
 
 1. Snapshot the worktree.
-2. Execute `plugins/review-loop/scripts/run-review-bg.sh code-implement 1`.
-3. Poll with `plugins/review-loop/scripts/check-review.sh`.
+2. Execute `review-loop/scripts/run-review-bg.sh code-implement 1`.
+3. Poll with `review-loop/scripts/check-review.sh`.
 4. Revert unauthorized changes to protected paths.
    - Allowed for `code-implement`: project source and test files, plus `.claude/review-loop-<session-id>.*`
    - Protected paths: `specs/design.md`, everything under `specs/reviews/`, and any `.claude/*` path that is not session-scoped runtime state
@@ -99,8 +99,8 @@ After confirmation:
    - `git reset HEAD`
    - Write `specs/reviews/code/round-<round>-claude-review.md`
    - If there are no substantive issues, stop the loop.
-   - Otherwise, execute `plugins/review-loop/scripts/run-review-bg.sh code-fix <round>`
-   - Poll with `plugins/review-loop/scripts/check-review.sh`
+   - Otherwise, execute `review-loop/scripts/run-review-bg.sh code-fix <round>`
+   - Poll with `review-loop/scripts/check-review.sh`
    - Revert unauthorized changes to protected paths
      - Allowed for `code-fix`: project source and test files, `.claude/review-loop-<session-id>.*`, and `specs/reviews/code/round-<round>-codex-response.md`
    - Read `specs/reviews/code/round-<round>-codex-response.md`
@@ -124,4 +124,4 @@ Preserve:
 
 ## Cancellation
 
-If the user asks to cancel at any point, run `plugins/review-loop/scripts/kill-review.sh <session-id>` and remove `.claude/review-loop.local.md`.
+If the user asks to cancel at any point, run `review-loop/scripts/kill-review.sh <session-id>` and remove `.claude/review-loop.local.md`.

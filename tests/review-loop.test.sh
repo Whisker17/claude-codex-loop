@@ -228,16 +228,16 @@ wait_for_file_exists() {
 test_required_files_exist() {
   local files=(
     "$REPO_ROOT/README.md"
-    "$REPO_ROOT/plugins/review-loop/AGENTS.md"
-    "$REPO_ROOT/plugins/review-loop/prompts/design-review.md"
-    "$REPO_ROOT/plugins/review-loop/prompts/code-implement.md"
-    "$REPO_ROOT/plugins/review-loop/prompts/code-fix.md"
-    "$REPO_ROOT/plugins/review-loop/commands/review-loop.md"
-    "$REPO_ROOT/plugins/review-loop/commands/cancel-review.md"
-    "$REPO_ROOT/plugins/review-loop/hooks/hooks.json"
-    "$REPO_ROOT/plugins/review-loop/scripts/run-review-bg.sh"
-    "$REPO_ROOT/plugins/review-loop/scripts/check-review.sh"
-    "$REPO_ROOT/plugins/review-loop/scripts/kill-review.sh"
+    "$REPO_ROOT/review-loop/AGENTS.md"
+    "$REPO_ROOT/review-loop/prompts/design-review.md"
+    "$REPO_ROOT/review-loop/prompts/code-implement.md"
+    "$REPO_ROOT/review-loop/prompts/code-fix.md"
+    "$REPO_ROOT/review-loop/commands/review-loop.md"
+    "$REPO_ROOT/review-loop/commands/cancel-review.md"
+    "$REPO_ROOT/review-loop/hooks/hooks.json"
+    "$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
+    "$REPO_ROOT/review-loop/scripts/check-review.sh"
+    "$REPO_ROOT/review-loop/scripts/kill-review.sh"
   )
 
   local path
@@ -245,13 +245,13 @@ test_required_files_exist() {
     assert_file_exists "$path" || return 1
   done
 
-  assert_executable "$REPO_ROOT/plugins/review-loop/scripts/run-review-bg.sh" || return 1
-  assert_executable "$REPO_ROOT/plugins/review-loop/scripts/check-review.sh" || return 1
-  assert_executable "$REPO_ROOT/plugins/review-loop/scripts/kill-review.sh" || return 1
+  assert_executable "$REPO_ROOT/review-loop/scripts/run-review-bg.sh" || return 1
+  assert_executable "$REPO_ROOT/review-loop/scripts/check-review.sh" || return 1
+  assert_executable "$REPO_ROOT/review-loop/scripts/kill-review.sh" || return 1
 }
 
 test_review_command_describes_two_stage_flow() {
-  local path="$REPO_ROOT/plugins/review-loop/commands/review-loop.md"
+  local path="$REPO_ROOT/review-loop/commands/review-loop.md"
   assert_file_exists "$path" || return 1
 
   assert_contains "$path" "Design stage complete. Review specs/design.md and confirm." || return 1
@@ -262,8 +262,8 @@ test_review_command_describes_two_stage_flow() {
 }
 
 test_cancel_command_and_hook_are_cleanup_only() {
-  local command_path="$REPO_ROOT/plugins/review-loop/commands/cancel-review.md"
-  local hook_path="$REPO_ROOT/plugins/review-loop/hooks/hooks.json"
+  local command_path="$REPO_ROOT/review-loop/commands/cancel-review.md"
+  local hook_path="$REPO_ROOT/review-loop/hooks/hooks.json"
 
   assert_file_exists "$command_path" || return 1
   assert_file_exists "$hook_path" || return 1
@@ -280,7 +280,7 @@ test_cancel_command_and_hook_are_cleanup_only() {
 test_run_review_bg_design_review_injects_context() {
   local project_root
   local fake_bin
-  local script_path="$REPO_ROOT/plugins/review-loop/scripts/run-review-bg.sh"
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
   local sentinel
   local prompt_capture
   local prompt_file
@@ -318,7 +318,7 @@ test_run_review_bg_precreates_output_directory_and_discovers_project_root() {
   local project_root
   local nested_dir
   local fake_bin
-  local script_path="$REPO_ROOT/plugins/review-loop/scripts/run-review-bg.sh"
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
   local sentinel
   local output_path
 
@@ -343,7 +343,7 @@ test_run_review_bg_precreates_output_directory_and_discovers_project_root() {
 test_run_review_bg_writes_failed_sentinel_on_nonzero_exit() {
   local project_root
   local fake_bin
-  local script_path="$REPO_ROOT/plugins/review-loop/scripts/run-review-bg.sh"
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
   local sentinel
 
   assert_file_exists "$script_path" || return 1
@@ -363,7 +363,7 @@ test_run_review_bg_fails_fast_when_launcher_never_writes_pid() {
   local project_root
   local fake_bin
   local failing_setsid_bin
-  local script_path="$REPO_ROOT/plugins/review-loop/scripts/run-review-bg.sh"
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
 
   assert_file_exists "$script_path" || return 1
   project_root="$(setup_project)"
@@ -380,7 +380,7 @@ test_run_review_bg_fails_fast_when_launcher_never_writes_pid() {
 test_run_review_bg_code_fix_and_verify_contexts() {
   local project_root
   local fake_bin
-  local script_path="$REPO_ROOT/plugins/review-loop/scripts/run-review-bg.sh"
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
   local prompt_capture
   local sentinel
 
@@ -420,7 +420,7 @@ test_run_review_bg_code_fix_and_verify_contexts() {
 test_run_review_bg_code_implement_uses_design_only() {
   local project_root
   local fake_bin
-  local script_path="$REPO_ROOT/plugins/review-loop/scripts/run-review-bg.sh"
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
   local prompt_capture
   local sentinel
 
@@ -445,7 +445,7 @@ test_run_review_bg_code_implement_uses_design_only() {
 
 test_check_review_reports_expected_statuses() {
   local project_root
-  local check_script="$REPO_ROOT/plugins/review-loop/scripts/check-review.sh"
+  local check_script="$REPO_ROOT/review-loop/scripts/check-review.sh"
   local pid
 
   assert_file_exists "$check_script" || return 1
@@ -494,8 +494,8 @@ test_check_review_reports_expected_statuses() {
 test_kill_review_terminates_session_and_cleans_runtime_files() {
   local project_root
   local fake_bin
-  local run_script="$REPO_ROOT/plugins/review-loop/scripts/run-review-bg.sh"
-  local kill_script="$REPO_ROOT/plugins/review-loop/scripts/kill-review.sh"
+  local run_script="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
+  local kill_script="$REPO_ROOT/review-loop/scripts/kill-review.sh"
   local pid_file
   local pid
 
@@ -554,8 +554,8 @@ setup_git_project() {
 test_smoke_design_review_round_in_real_git_repo() {
   local project_root
   local fake_bin
-  local script_path="$REPO_ROOT/plugins/review-loop/scripts/run-review-bg.sh"
-  local check_script="$REPO_ROOT/plugins/review-loop/scripts/check-review.sh"
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
+  local check_script="$REPO_ROOT/review-loop/scripts/check-review.sh"
   local sentinel
   local output_path
 
@@ -605,11 +605,11 @@ test_smoke_hook_relative_path_resolves_from_project_root() {
   project_root="$(setup_git_project)" || return 1
 
   # Copy plugin into the project (simulating installation)
-  cp -R "$REPO_ROOT/plugins" "$project_root/plugins"
+  cp -R "$REPO_ROOT/review-loop" "$project_root/review-loop"
 
   # Extract hook command value from hooks.json (match "command": "..." key, take last match)
   hook_command="$(
-    awk -F'"' '/"command"[[:space:]]*:/ { print $4 }' "$project_root/plugins/review-loop/hooks/hooks.json" | tail -n 1
+    awk -F'"' '/"command"[[:space:]]*:/ { print $4 }' "$project_root/review-loop/hooks/hooks.json" | tail -n 1
   )"
   [[ -n "$hook_command" ]] || fail "could not extract hook command from hooks.json" || return 1
 
@@ -630,7 +630,7 @@ test_smoke_hook_relative_path_resolves_from_project_root() {
 
 test_kill_review_from_hook_cleans_state_and_prompt_files() {
   local project_root
-  local kill_script="$REPO_ROOT/plugins/review-loop/scripts/kill-review.sh"
+  local kill_script="$REPO_ROOT/review-loop/scripts/kill-review.sh"
 
   assert_file_exists "$kill_script" || return 1
   project_root="$(setup_project)"

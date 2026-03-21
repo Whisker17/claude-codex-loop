@@ -20,5 +20,5 @@ This plugin coordinates Claude Code and Codex in a strict two-stage workflow.
 - Never commit, stage, or reset git state from Codex prompts.
 - Keep context limited to the current design plus the current review loop artifacts.
 - Preserve all review files as audit records.
-- Shared shell helpers live in `plugins/review-loop/scripts/common.sh`; runtime scripts source it for state lookup, session file paths, and prompt assembly.
+- Shared shell helpers live in `review-loop/scripts/common.sh`; runtime scripts source it for state lookup, session file paths, and prompt assembly.
 - `REVIEW_LOOP_TIMEOUT_SECONDS` may be set for testing or debugging to override the default 1200 second watchdog timeout.
