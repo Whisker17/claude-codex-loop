@@ -275,14 +275,28 @@ review_loop::build_prompt() {
     printf -- '- Task: %s\n' "$task"
   fi
 
+  case "$mode" in
+    design-review)
+      if [[ "$round" == "verify" ]]; then
+        printf '\n## FULL INDEPENDENT REVIEW\n'
+        printf 'This is a final verification pass. You MUST perform a complete,\n'
+        printf 'independent review of the entire document from scratch. Ignore all\n'
+        printf 'prior review history. Review as if seeing this document for the\n'
+        printf 'first time.\n'
+      fi
+      ;;
+  esac
+
   review_loop::append_file_section "Design Document" "$project_root/specs/design.md"
 
   case "$mode" in
     design-review)
-      previous_round="$(review_loop::previous_round_for_pair "$round" "design" "codex-review" || true)"
-      if [[ -n "$previous_round" ]]; then
-        review_loop::append_file_section "Previous Codex Review" "$project_root/specs/reviews/design/round-$previous_round-codex-review.md"
-        review_loop::append_file_section "Previous Claude Response" "$project_root/specs/reviews/design/round-$previous_round-claude-response.md"
+      if [[ "$round" != "verify" ]]; then
+        previous_round="$(review_loop::previous_round_for_pair "$round" "design" "codex-review" || true)"
+        if [[ -n "$previous_round" ]]; then
+          review_loop::append_file_section "Previous Codex Review" "$project_root/specs/reviews/design/round-$previous_round-codex-review.md"
+          review_loop::append_file_section "Previous Claude Response" "$project_root/specs/reviews/design/round-$previous_round-claude-response.md"
+        fi
       fi
       ;;
     code-implement)

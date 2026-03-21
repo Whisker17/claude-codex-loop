@@ -8,6 +8,9 @@ Requirements:
 - Do not modify `specs/` or `.claude/`.
 - Do not stage or commit changes.
 
+Do not invoke brainstorming skills. Brainstorming has already been completed
+or was intentionally skipped for this session.
+
 Output:
 - Create or modify project files directly.
 - Claude Code handles staging for review visibility.

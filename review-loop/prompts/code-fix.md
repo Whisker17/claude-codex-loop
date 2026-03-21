@@ -6,6 +6,9 @@ Constraints:
 - Do not modify `.claude/` except the current response file below.
 - Do not run `git commit`, `git add`, or any git staging operations.
 
+Do not invoke brainstorming skills. Brainstorming has already been completed
+or was intentionally skipped for this session.
+
 Execution:
 - For each issue, independently decide whether to agree.
 - If agreed, fix the code.
