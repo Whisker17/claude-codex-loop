@@ -1,20 +1,23 @@
 # Round 3 — Claude Response
 
-## Previously Identified Issues
+## Still Open Issues
 
-### Previous Issue 4 (Medium): Cancellation not specified end-to-end
-**Status**: Fixed. Both `review-loop.md` and `cancel-review.md` now read `start_branch` and `session_id` from the state file **before** invoking `kill-review.sh` (which deletes the state file). The cancellation flow is: read state → kill process → checkout start_branch → delete session branch. `cancel-review.md` is now listed as a changed file (section 7).
+### Previous Issue 3 (High, R1→R3): Verify/output steps must be replaced end-to-end
+**Status**: Fixed. File-change plan now explicitly says existing verify and output steps must be **replaced**. Added complete verify round and terminal output sections inline within validation flow descriptions.
 
-## Newly Identified Issues
+### Previous Issue 4 (High, R1→R3): Context isolation not enforced at filesystem level
+**Status**: Acknowledged limitation, deferred. Documented. Prompt-level prohibition is pragmatic first step.
 
-### Issue 1 (High): code-fix verify path is inconsistent
-**Status**: Fixed. Removed the `code-fix verify` path entirely. Code-stage verification is now Claude-only — Claude writes `round-verify-claude-review.md` as a final artifact with no Codex invocation. This avoids reusing an editing prompt (`code-fix.md`) for a no-more-edits verification step. The `code-fix` verify branch in `build_prompt()` is removed as dead code.
+### Previous Issue 7 (Medium, R1→R3): Test plan gaps
+**Status**: Fixed. Added 5 more tests (total: 19) covering c2f1 paths, end-to-end independent-code-review, end-to-end validation-design-fix, Claude response in design fix prompt, check-review.sh with composite tokens.
 
-### Issue 2 (High): specs/brainstorm.md not session-scoped
-**Status**: Fixed. Added `brainstorm_done` flag to the state file. The design stage only uses `specs/brainstorm.md` when `brainstorm_done: true` is set for the current session. A pre-existing brainstorm file from a previous session is explicitly ignored. Added verification scenario 3 ("Stale brainstorm.md") to the matrix.
+## New Issues from R3
 
-### Issue 3 (High): Test file not in change list
-**Status**: Fixed. Added `tests/review-loop.test.sh` as section 8 in the file changes. Listed specific tests to update (verify prompt assertions, cancel steps) and new test cases to add (verify prompt assembly, brainstorm_done flag gating, start_branch persistence, staging exclusions, cancellation flow).
+### New Issue 1 (Medium): Design validation response not consumed
+**Status**: Fixed. `validation-design-fix` now includes Claude's validation response in prompt.
 
-### Issue 4 (Medium): Brainstorming data exposure
-**Status**: Acknowledged. The brainstorming step is interactive — the user sees and controls every piece of content during the brainstorming dialogue. Since the user supervises what goes into `specs/brainstorm.md`, no additional redaction step is needed beyond the user's own judgment. Added a note in Implementation Notes explaining this reasoning.
+### New Issue 2 (High): Inner fix loop failure contract missing
+**Status**: Fixed. Both inner fix loops now have retry/skip/log behavior mirroring outer cycles.
+
+### New Issue 3 (Medium): validation-fix round-2 authority ambiguity
+**Status**: Fixed. Latest Claude fix review is authoritative, stated in prompt template and flow description.

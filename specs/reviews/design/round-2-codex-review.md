@@ -4,17 +4,21 @@
 
 ### Previous Issue 1
 Status: Fixed
-Severity: High
+Severity: Critical
 
-Description: The stage-transition `git add` sequence is now conditional on `specs/brainstorm.md` existing (`specs/design.md:159-169`), which resolves the missing-pathspec failure from round 1.
+Description: The design now gives validation rounds and validation fix rounds their own composite identities (`c<cycle>` and `c<cycle>f<fix-round>`) plus dedicated validation output paths, so the round-1 namespace collision is resolved.
 
-Recommendation: None.
+References: [specs/design.md:17](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L17), [specs/design.md:28](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L28), [specs/design.md:261](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L261), [specs/design.md:528](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L528)
+
+Recommendation: None for the collision itself. Keep all validation artifacts in the validation namespace.
 
 ### Previous Issue 2
 Status: Fixed
 Severity: High
 
-Description: Brainstorming now runs after session branch creation (`specs/design.md:113-135`), so `specs/brainstorm.md` is created on the session branch instead of dirtying the caller's original branch.
+Description: The design-stage fix loop now has an explicit implementation path. The new `validation-design-fix` mode and prompt-builder case give Codex a defined way to receive validation findings during follow-up design audits.
+
+References: [specs/design.md:168](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L168), [specs/design.md:316](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L316), [specs/design.md:389](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L389), [specs/design.md:605](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L605)
 
 Recommendation: None.
 
@@ -22,75 +26,95 @@ Recommendation: None.
 Status: Fixed
 Severity: High
 
-Description: The proposed `code-fix` verify behavior now omits the current Claude review as well as prior Codex responses (`specs/design.md:84-102`), which resolves the specific anchoring problem identified in round 1.
+Description: The ordering conflict is resolved. Independent validation is now explicitly positioned before the terminal verify round, so the existing "no more edits" semantics no longer directly contradict the validation loop.
 
-Recommendation: None.
+References: [specs/design.md:30](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L30), [specs/design.md:50](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L50), [specs/design.md:367](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L367), [specs/design.md:408](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L408)
+
+Recommendation: None on ordering. A separate verify-trigger ambiguity remains and is listed below as a new issue.
 
 ### Previous Issue 4
-Status: Fixed
-Severity: Medium
+Status: Still open
+Severity: High
 
-Description: The design-review prompt now makes the output split conditional on prior context being present and explicitly tells verify rounds to report findings as fresh (`specs/design.md:40-47`).
+Description: The design now documents the isolation limitation, but it still does not enforce "zero shared review history." The validator continues to run in the full workspace via `codex exec -C "$project_root" --full-auto`, so prior review files remain technically reachable. Because the design relies only on prompt instructions, accidental workspace reads or prompt-injection from the artifact under review can still defeat the isolation guarantee.
 
-Recommendation: None.
+References: [specs/design.md:13](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L13), [specs/design.md:592](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L592), [specs/design.md:598](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L598), [run-review-bg.sh:74](/Users/whisker/Work/src/personal/claude-codex-loop/review-loop/scripts/run-review-bg.sh#L74)
+
+Recommendation: Enforce isolation at the filesystem boundary by running independent validation in a scratch worktree or temporary directory that contains only the allowed artifacts.
 
 ### Previous Issue 5
 Status: Fixed
 Severity: Medium
 
-Description: The phase model has been simplified to the three persisted values actually used by the workflow (`specs/design.md:171-179`, `specs/design.md:243-244`), removing the ambiguous verify/gate phase enum from the earlier draft.
+Description: Failure handling is now defined. The design specifies the retry/skip behavior, makes missing validation artifacts an explicit branch, and makes validation staging conditional on the directory existing.
 
-Recommendation: None.
+References: [specs/design.md:380](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L380), [specs/design.md:383](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L383), [specs/design.md:451](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L451), [specs/design.md:607](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L607)
+
+Recommendation: None on control-flow definition. A separate policy problem remains and is listed below as a new issue.
 
 ### Previous Issue 6
-Status: Fixed
+Status: Still open
 Severity: Medium
 
-Description: The design now defines a fallback rule for missing skill-availability context: skip brainstorming and proceed directly to design (`specs/design.md:130-132`, `specs/design.md:245`).
+Description: `validation-fix` now includes the original validation review, Claude's initial triage, and the previous Codex response, but the design still does not define how Claude's post-fix review for `c<cycle>f1` becomes input to `c<cycle>f2`. As written, the second fix round can still run against stale triage unless Claude silently overwrites `code-c<cycle>-claude-review.md`, and that overwrite contract is nowhere specified.
 
-Recommendation: None.
+References: [specs/design.md:331](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L331), [specs/design.md:341](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L341), [specs/design.md:426](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L426), [specs/design.md:438](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L438), [specs/design.md:606](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L606)
+
+Recommendation: Define an explicit per-fix-round Claude review contract for validation fixes. Either create `code-c<cycle>f<fix-round>-claude-review.md` artifacts or explicitly require Claude to overwrite the cycle triage file before each subsequent `validation-fix` round and include that file in tests.
 
 ### Previous Issue 7
 Status: Still open
-Severity: Low
+Severity: Medium
 
-Description: The design still does not define a concrete verification matrix for the new v2.1 branches. The implementation notes remain high-level (`specs/design.md:238-245`), so prompt-assembly and orchestration regressions are still easy to miss.
+Description: The test plan improved, but it still does not cover the highest-risk cross-round paths. There is still no explicit cycle-2 (`c2` / `c2f1`) prompt or end-to-end coverage, no test that independent validators are blocked from reading the new `specs/reviews/validation/` namespace, and no test that newly added untracked files appear in validation diffs.
 
-Recommendation: Add at least a lightweight scenario matrix or explicit manual checks for brainstorming present vs absent, verify-round prompt assembly, and cancellation during brainstorming.
+References: [specs/design.md:488](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L488), [specs/design.md:520](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L520), [specs/design.md:528](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L528), [specs/design.md:552](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L552)
+
+Recommendation: Add tests for `c2` and `c2f1` paths, round-2 validation-fix input refresh, denylisting of `specs/reviews/validation/`, and validation diff behavior when the implementation adds new untracked files.
 
 ## Newly Identified Issues
 
 ### Issue 1
 Severity: High
 
-Description: The design adds verify-specific prompt behavior in `build_prompt()` (`specs/design.md:61-105`), but the proposed `review-loop/commands/review-loop.md` changes (`specs/design.md:107-187`) never define the concrete orchestration step that calls `run-review-bg.sh ... verify`, nor do they specify which verify artifact Claude should read back. The current command contract still only says "perform one final verification pass" in both stages (`review-loop/commands/review-loop.md:72`, `review-loop/commands/review-loop.md:107`). As written, the new `round=="verify"` branches can remain dead code or be implemented ad hoc.
+Description: The prompt-level denylist for independent validation does not include the new `specs/reviews/validation/` directory. That means cycle-2 "independent" validators can still read cycle-1 validation reviews, Claude responses, and fix reviews directly from the workspace, even under the design's softer prompt-only isolation model. This is a new gap introduced by the validation namespace itself.
 
-Recommendation: Update the command spec to invoke verify rounds explicitly with the `verify` round token, name the expected `round-verify-*` files, and describe the readback/termination behavior. If code-stage verification is meant to stay Claude-only, remove the unused `code-fix` verify path instead of leaving a dangling interface.
+References: [specs/design.md:84](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L84), [specs/design.md:126](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L126), [specs/design.md:475](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L475), [specs/design.md:577](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L577), [specs/design.md:596](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L596)
+
+Recommendation: Extend the independent-validation prompts and `AGENTS.md` to prohibit reads from `specs/reviews/validation/` as well. Preferably, solve this together with hard filesystem isolation so the prohibition is enforced rather than advisory.
 
 ### Issue 2
 Severity: High
 
-Description: v2.1 introduces `specs/brainstorm.md` as a tracked design artifact (`specs/design.md:126`, `specs/design.md:164-166`), but the code-stage protection model is not updated. The proposal only adds review instructions (`specs/design.md:145-157`) and explicitly leaves `code-implement.md` and `code-fix.md` unchanged (`specs/design.md:240-241`). In the current orchestrator, protected paths and staging exclusions cover `specs/design.md`, `specs/reviews/**`, and `.claude/**` only (`review-loop/commands/review-loop.md:93-105`). A code-implement or code-fix run can therefore modify or stage `specs/brainstorm.md` without being reverted, which muddies the audit trail and pollutes the code-review diff.
+Description: The new `append_diff_section()` helper builds validation code context with plain `git diff "$baseline_sha"`, which excludes untracked files. Regular Claude code review explicitly stages all changes before diffing, so new source or test files are visible there. Independent code validation and `validation-fix` prompts, by contrast, can omit an entire newly added file from the review context.
 
-Recommendation: Add `specs/brainstorm.md` to the code-stage protected-path rollback logic and to the staging exclusions, and explicitly forbid modifying it in every implementation/fix prompt.
+References: [specs/design.md:294](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L294), [specs/design.md:323](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L323), [specs/design.md:345](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L345), [specs/design.md:604](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L604), [review-loop.md:165](/Users/whisker/Work/src/personal/claude-codex-loop/review-loop/commands/review-loop.md#L165), [review-loop.md:166](/Users/whisker/Work/src/personal/claude-codex-loop/review-loop/commands/review-loop.md#L166)
+
+Recommendation: Assemble validation diffs with the same semantics as the regular code-review path, using a temporary index or another explicit mechanism that includes newly created files without mutating the real index.
 
 ### Issue 3
 Severity: High
 
-Description: The proposed brainstorming-conflict fix is not propagated to the fresh background Codex sessions that do the creative work. The one-time suppression rule exists only in the top-level workflow and AGENTS text (`specs/design.md:122-129`, `specs/design.md:199-205`), while the implementation notes explicitly keep `review-loop/prompts/code-implement.md` and `review-loop/prompts/code-fix.md` unchanged (`specs/design.md:240-241`). Because those sessions start independently via `codex exec` (`review-loop/scripts/run-review-bg.sh:31-75`), they do not inherently inherit the "brainstorming already completed" state, so the original `superpowers:brainstorming` conflict can recur during implementation or fix rounds.
+Description: The verify/output control flow is internally inconsistent. The flow diagram says verify runs only if validation or the regular loop "used all rounds," the inserted stage sections say to proceed to verify "if applicable," the verification scenarios show verify running after every validation outcome, and the existing command contract still gates verify on exhausting all five regular rounds. The user-facing completion strings are equally ambiguous: the new unresolved-validation messages are added without replacing the original standard stage-complete outputs.
 
-Recommendation: Persist a `brainstorm_done` or `skip_brainstorm` flag in state and inject it into every background prompt that can trigger skills, or update the code-implement and code-fix prompts to say explicitly that brainstorming has already been handled and must not run again.
+References: [specs/design.md:32](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L32), [specs/design.md:38](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L38), [specs/design.md:399](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L399), [specs/design.md:443](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L443), [specs/design.md:612](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L612), [specs/design.md:617](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L617), [review-loop.md:122](/Users/whisker/Work/src/personal/claude-codex-loop/review-loop/commands/review-loop.md#L122), [review-loop.md:132](/Users/whisker/Work/src/personal/claude-codex-loop/review-loop/commands/review-loop.md#L132), [review-loop.md:175](/Users/whisker/Work/src/personal/claude-codex-loop/review-loop/commands/review-loop.md#L175), [review-loop.md:179](/Users/whisker/Work/src/personal/claude-codex-loop/review-loop/commands/review-loop.md#L179)
+
+Recommendation: Replace the affected design-stage and code-stage algorithms end-to-end instead of inserting partial sections. Define one exact verify predicate per stage and one final user-visible output path per terminal outcome.
 
 ### Issue 4
-Severity: Medium
+Severity: High
 
-Description: The cancellation path for the new brainstorming stage is still underspecified. The design promises that cancellation during brainstorming can delete the session branch cleanly (`specs/design.md:135`, `specs/design.md:205`), but it keeps the state schema unchanged (`specs/design.md:243-244`) and does not include any change to the dedicated cancel flow. `review-loop/commands/cancel-review.md:9-11` still only kills the session and removes the local state file, and `review-loop/scripts/kill-review.sh:34-40` only terminates the process group and deletes runtime files. There is no recorded source branch to return to, and no shared cleanup step that can actually delete `review-loop/<session-id>` while it is checked out.
+Description: The design converts infrastructure failure into a false "no issues found" result. After two failed validation attempts, the cycle is skipped and treated as success-equivalent, and the scenarios then describe the workflow continuing normally. That means the system can report a clean validation outcome even when no independent validation ran at all.
 
-Recommendation: Record the starting branch in state, add a shared cancellation helper that checks out the original branch, and update both `review-loop.md` and `cancel-review.md` to delete the session branch when cancellation occurs before the design-stage commit.
+References: [specs/design.md:380](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L380), [specs/design.md:383](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L383), [specs/design.md:421](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L421), [specs/design.md:423](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L423), [specs/design.md:608](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L608), [specs/design.md:621](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L621)
+
+Recommendation: Represent double-failure as a distinct `validation_unavailable` or unresolved state, surface it in the final output, and avoid treating it as a successful validation pass.
 
 ### Issue 5
 Severity: Medium
 
-Description: The design stage now treats `specs/brainstorm.md` as the primary input whenever it exists (`specs/design.md:140-142`). That makes a model-generated intermediary artifact more authoritative than the original user task stored in state. If the brainstorm omits a requirement or reframes the request, the resulting design can stay faithful to the brainstorm while drifting from the user's actual intent.
+Description: The artifact naming contract is internally inconsistent. The "Artifact Naming Convention" section says fix artifacts use `design-c<cycle>-fix-<fix-round>-...` and `code-c<cycle>-fix-<fix-round>-...`, but the round tokens, expected output paths, flow examples, tests, and artifact layout all use compact `c<cycle>f<fix-round>` filenames like `design-c1f1-codex-review.md`.
 
-Recommendation: Keep the original task description authoritative and treat `specs/brainstorm.md` as supplementary context. The design stage should synthesize both inputs, with conflicts resolved in favor of the user's task.
+References: [specs/design.md:24](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L24), [specs/design.md:25](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L25), [specs/design.md:281](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L281), [specs/design.md:389](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L389), [specs/design.md:533](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L533), [specs/design.md:580](/Users/whisker/Work/src/personal/claude-codex-loop/specs/design.md#L580)
+
+Recommendation: Normalize the spec to a single naming scheme everywhere. If `c<cycle>f<fix-round>` is the real machine contract, update the prose examples to match it exactly.

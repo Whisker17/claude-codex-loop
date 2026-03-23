@@ -1,22 +1,24 @@
 # Round 1 — Claude Response
 
-## Issue 1 (High): git add fails on missing specs/brainstorm.md
-**Status**: Fixed. Stage transition now conditionally adds `specs/brainstorm.md` only when the file exists, followed by a separate `git add` for the always-present artifacts.
+All 7 issues addressed:
 
-## Issue 2 (High): Brainstorming before branch creation breaks isolation
-**Status**: Fixed. Brainstorming now runs **after** session branch creation, not before. `specs/brainstorm.md` is written on the session branch, maintaining branch isolation. Cancellation during brainstorming deletes the session branch cleanly.
+## Issue 1 (Critical): Artifact naming collision
+**Status**: Fixed. Introduced `c<cycle>` and `c<cycle>f<fix-round>` composite round tokens. All validation artifacts use this naming scheme (e.g., `design-c1-review.md`, `code-c1f1-codex-response.md`). Updated `validate_round()` to accept these tokens. Added `validation_cycle_from_round()` helper. No collision with main loop's `round-1` through `round-5` namespace.
 
-## Issue 3 (High): code-fix verify still includes Current Claude Review
-**Status**: Fixed. For `code-fix` verify mode, both `Current Claude Review` and prior Codex responses are now omitted. The verify pass receives only the spec, code diff context, and the FULL INDEPENDENT REVIEW header.
+## Issue 2 (High): No mechanism for validation findings in Codex prompt
+**Status**: Fixed. Added a new dedicated mode `validation-design-fix` with its own prompt template. The `build_prompt()` function for this mode reads the validation review file and injects it as `## Validation Findings`. For `validation-fix`, the prompt now includes both the validation review and Claude's triage review. This eliminates the need for Claude to inject ad hoc content into background Codex invocations.
 
-## Issue 4 (Medium): Output format inconsistent for verify rounds
-**Status**: Fixed. The output requirements in the design-review prompt now specify conditional behavior: regular rounds (with prior context) separate old/new issues; verify rounds (no prior context) report all findings as fresh without attempting to classify them as "previously identified."
+## Issue 3 (High): Verify step semantics conflict
+**Status**: Fixed. Moved validation to run **before** the verify round, not after it. Added a "Validation and Verify Round Ordering" section. The verify round remains the absolute terminal pass with its "no further edits" semantics preserved.
 
-## Issue 5 (Medium): Phase model under-specified
-**Status**: Fixed. Simplified the phase enum to only the three values the command prompt actually persists: `design`, `code`, `done`. Brainstorming is interactive and completes inline before the design loop — it doesn't need its own persisted phase. This removes the ambiguity around verify/gate phases.
+## Issue 4 (High): Context isolation not enforced
+**Status**: Fixed. Added explicit prompt instructions prohibiting the validator from reading `specs/reviews/design/`, `specs/reviews/code/`, or `.claude/` files. Reinforced in AGENTS.md. Added a "Context Isolation" section documenting the two-layer approach (prompt-assembly + prompt-instruction) and acknowledging the limitation that true filesystem isolation is deferred.
 
-## Issue 6 (Medium): Brainstorm detection relies on ephemeral context
-**Status**: Addressed. Added explicit fallback rule: if skill availability context is unavailable (e.g., conversation truncated), skip brainstorming. The design stage works identically without brainstorming output.
+## Issue 5 (Medium): Validation failure handling underspecified
+**Status**: Fixed. Added explicit steps 5-6 in the validation flow: on double failure, skip the cycle and treat as "no issues found". Made `git add specs/reviews/validation/` conditional on directory existence. Failures are logged.
 
-## Issue 7 (Low): No verification matrix
-**Status**: Acknowledged. This is valid but out of scope for the design doc. Verification scenarios will be exercised during the code stage when the implementation is tested end-to-end.
+## Issue 6 (Medium): validation-fix missing Claude's triage review
+**Status**: Fixed. Updated `build_prompt()` for `validation-fix` to include both the validation review and Claude's triage review (`code-c<cycle>-claude-review.md`). For fix round 2, the previous Codex response is also included.
+
+## Issue 7 (Medium): Test plan gaps
+**Status**: Fixed. Added 4 more tests: `test_validation_fix_prompt_round_2_includes_previous_response`, `test_validation_design_fix_prompt_includes_validation_findings`, `test_validate_round_accepts_validation_tokens`, `test_validation_skip_on_double_failure`. Total is now 12 new tests.

@@ -1,23 +1,36 @@
 # Round 2 — Claude Response
 
-## Previously Identified Issues
+## Previously Identified Issues (from R1)
 
-### Previous Issue 7 (Low): No verification matrix
-**Status**: Fixed. Added a lightweight verification scenarios section covering brainstorming present/absent, verify round prompt assembly, regular round prompt assembly, and cancellation paths.
+### Issue 1 (Critical): Artifact naming collision — Confirmed fixed by R2.
 
-## Newly Identified Issues
+### Issue 2 (High): No mechanism for validation findings in Codex prompt — Confirmed fixed by R2.
 
-### Issue 1 (High): Verify round orchestration not specified
-**Status**: Fixed. Added explicit verify round orchestration to both design stage (section C) and code stage (section D) in the command prompt changes. Verify rounds use the `verify` token with `run-review-bg.sh` and produce `round-verify-*` output files. The command prompt now specifies the exact invocation, expected output file, and readback behavior.
+### Issue 3 (High): Verify step semantics conflict — Confirmed fixed by R2.
 
-### Issue 2 (High): specs/brainstorm.md not protected in code stage
-**Status**: Fixed. Added `specs/brainstorm.md` to code-stage protected paths (section G). Updated both the rollback logic and the staging exclusions to include `':!specs/brainstorm.md'`. Also added `specs/brainstorm.md` to the "must not modify" constraint in AGENTS.md.
+### Issue 4 (High): Context isolation not enforced at filesystem level — Still open, acknowledged as deferred limitation. Prompt-level prohibition is pragmatic first step; filesystem isolation can be added in follow-up if context leakage is observed.
 
-### Issue 3 (High): Brainstorming conflict not suppressed in Codex sessions
-**Status**: Fixed. Added explicit brainstorming-suppression instructions to `code-implement.md` and `code-fix.md` (new sections 5 and 6). Also added "Do not invoke brainstorming skills" to both Design stage and Code stage sections of AGENTS.md. Note: Codex sessions launched via `codex exec` don't have superpowers installed, so the suppression is defense-in-depth rather than strictly necessary.
+### Issue 5 (Medium): Validation failure handling — Confirmed fixed by R2.
 
-### Issue 4 (Medium): Cancellation during brainstorming underspecified
-**Status**: Fixed. Added `start_branch` field to the state file (section H) to record the original branch. Updated cancellation flow (section I) to check out the starting branch and delete the session branch. This covers cancellation at any point in the workflow.
+### Issue 6 (Medium): validation-fix missing Claude's post-fix review
+**Status**: Fixed. Added per-fix-round Claude review artifacts (`code-c<cycle>f<fix-round>-claude-review.md`). The `build_prompt()` for `validation-fix c<cycle>f2` now includes the previous Claude fix review and previous Codex response. Claude writes a review after each fix round.
 
-### Issue 5 (Medium): brainstorm.md more authoritative than user task
-**Status**: Fixed. Updated design stage input handling (section B) to keep the user's task description authoritative and treat `specs/brainstorm.md` as supplementary context. Conflicts between brainstorm output and task description are resolved in favor of the task description.
+### Issue 7 (Medium): Test plan gaps
+**Status**: Fixed. Added 4 more tests (total now 14): `test_validation_cycle_2_uses_distinct_artifacts`, `test_append_diff_section_includes_untracked_files`, expanded code-review history isolation test to cover `specs/reviews/validation/`.
+
+## Newly Identified Issues (R2)
+
+### New Issue 1 (High): `specs/reviews/validation/` not in prompt denylist
+**Status**: Fixed. Updated both independent review prompt templates to prohibit reading any files under `specs/reviews/` (all subdirectories). Updated AGENTS.md and Context Isolation section.
+
+### New Issue 2 (High): `append_diff_section` misses untracked files
+**Status**: Fixed. Rewrote helper to use temporary git index (`GIT_INDEX_FILE`), matching regular code review semantics. Temp index cleaned up immediately.
+
+### New Issue 3 (High): Verify/output control flow inconsistent
+**Status**: Fixed. Replaced partial section insertions with complete end-to-end algorithms for both stages. One verify predicate and one output path per terminal outcome.
+
+### New Issue 4 (High): Double failure treated as success
+**Status**: Fixed. Double failure sets `validation_skipped`, logged, and surfaced in final output. Not treated as successful validation.
+
+### New Issue 5 (Medium): Naming convention inconsistency
+**Status**: Fixed. Normalized to `c<cycle>f<fix-round>` compact form everywhere.

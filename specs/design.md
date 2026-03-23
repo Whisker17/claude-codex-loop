@@ -1,26 +1,207 @@
-# Review Loop v2.1 Implementation Design
+# Independent Validation Round — Implementation Design
 
 ## Overview
 
-Incremental update to the review-loop plugin addressing two production issues: attention narrowing during review rounds and superpowers:brainstorming conflict. All changes are backwards-compatible.
+Add an independent validation sub-phase to both the design and code stages of review-loop. After the existing Claude-Codex review loop converges, a fresh Codex instance with zero shared review history re-examines the output using a different prompt focused on blind spots that collaborative review tends to miss. If validation finds issues, they are fed back into the regular review loop for another round of fixes before re-validation.
+
+## Problem
+
+Claude and Codex converge during iterative review (agreeing there are no remaining substantive issues), but independent post-hoc review still finds entirely new categories of problems. The two reviewers, operating under the same prompt framework with shared context, develop overlapping attention patterns — certain dimensions are never covered across any round.
+
+## Design Principles
+
+1. **Context isolation** — the independent reviewer sees only the output artifact (design doc or code diff) and the task description, with zero review history. Isolation is enforced at both the prompt layer (no review history injected) and the prompt instruction layer (explicit prohibition on reading review files from the workspace, including `specs/reviews/validation/` from prior cycles).
+2. **Perspective diversity** — prompt templates focused specifically on dimensions that collaborative review tends to miss
+3. **Minimal architecture change** — reuse existing `run-review-bg.sh` / `check-review.sh` infrastructure; add new prompt templates and modes only
+
+## Artifact Naming Convention
+
+All validation artifacts use a compact `c<cycle>` prefix to prevent naming collisions across validation cycles and with main review loop artifacts. Fix loop artifacts use `c<cycle>f<fix-round>` naming:
+
+- Validation reviews: `design-c<cycle>-review.md`, `code-c<cycle>-review.md`
+- Validation responses: `design-c<cycle>-response.md`
+- Claude triage reviews: `code-c<cycle>-claude-review.md`
+- Claude per-fix-round reviews: `code-c<cycle>f<fix-round>-claude-review.md`
+- Design fix reviews from Codex: `design-c<cycle>f<fix-round>-codex-review.md`
+- Code fix responses from Codex: `code-c<cycle>f<fix-round>-codex-response.md`
+
+All under `specs/reviews/validation/`.
+
+The round parameter passed to `run-review-bg.sh` and `build_prompt()` uses the composite token `c<cycle>` for validation rounds and `c<cycle>f<fix-round>` for fix rounds. The `validate_round()` function is updated to accept these tokens in addition to integers 1-5 and "verify".
+
+## Validation and Verify Round Ordering
+
+Independent validation runs **before** the existing verify round, not after it. The verify round remains the absolute terminal review pass.
+
+### Design stage — complete algorithm
+
+```
+1. Regular design review loop (max 5 rounds) → converge
+2. Independent validation (max 2 cycles)
+3. Verify round trigger: if (regular loop used all 5 rounds AND last round changed design)
+   OR (any validation cycle changed design), run verify
+4. User gate
+   - If unresolved validation findings OR validation was skipped due to infrastructure failure:
+     Output: "Design stage complete with unresolved validation findings.
+     Review specs/design.md and specs/reviews/validation/ before confirming."
+   - Otherwise:
+     Output: "Design stage complete. Review specs/design.md and confirm."
+```
+
+### Code stage — complete algorithm
+
+```
+1. Regular code review loop (max 5 rounds) → converge
+2. Independent validation (max 2 cycles)
+3. Verify round trigger: if (regular loop used all 5 rounds AND last round required code changes)
+   OR (any validation cycle required code changes), run Claude-only verify
+4. Completion
+   - If unresolved validation findings OR validation was skipped due to infrastructure failure:
+     Output: "Implementation complete with unresolved validation findings.
+     Review specs/reviews/validation/ for details.
+     All changes on branch review-loop/<session-id>."
+   - Otherwise:
+     Output: "Implementation complete. All changes on branch review-loop/<session-id>."
+```
+
+The verify round's "do NOT make further edits" and "do NOT invoke Codex" semantics are preserved — they apply only after all validation is complete.
 
 ## File Changes
 
-### 1. `review-loop/prompts/design-review.md`
+### 1. New file: `review-loop/prompts/independent-design-review.md`
 
-**Current state**: Minimal auditor prompt with basic audit criteria and constraints.
+Independent validation prompt for design documents. Focuses on blind spots in collaborative design review.
 
-**Changes**: Full rewrite with stronger review instructions.
+```markdown
+Role: Independent design validator (READ-ONLY role)
+Task: Perform a completely independent review of the following design document.
+
+CRITICAL: You are an independent validator. You have NOT participated in any
+prior review of this document. You have NOT seen any prior review history.
+Your job is to find problems that a collaborative, iterative review process
+is likely to miss.
+
+Collaborative reviews tend to develop shared assumptions over multiple rounds.
+Focus specifically on:
+
+- Assumptions stated as facts without validation
+- Edge cases acknowledged but dismissed as "unlikely"
+- Interfaces that are internally consistent but may break under real-world
+  usage patterns
+- Requirements that may have been implicitly dropped during iterative refinement
+- Cross-cutting concerns (observability, deployment, rollback) that nobody owns
+- Implicit dependencies between components that are not documented
+- Error handling paths that are described in general terms but lack specifics
+
+Constraints:
+- You MUST NOT modify any files except your review output file
+- Do not modify specs/design.md, source code, tests, or configuration
+- Do not run git commit, git add, or any git write operations
+- Do NOT reference or assume knowledge of any prior review rounds
+- Do NOT read or access any files under specs/reviews/ (including
+  specs/reviews/design/, specs/reviews/code/, and specs/reviews/validation/)
+  or .claude/. Your review must be based solely on the design document and
+  task description provided in this prompt.
+
+Output requirements:
+- Each issue: severity (critical/high/medium/low), description, recommendation
+- For each issue, include a judgement: "likely missed by iterative review because: ..."
+- Write ONLY to specs/reviews/validation/design-{{ROUND}}-review.md
+
+The runtime context is appended below.
+```
+
+### 2. New file: `review-loop/prompts/independent-code-review.md`
+
+Independent validation prompt for code changes. Focuses on implementation-level blind spots.
+
+```markdown
+Role: Independent code validator (READ-ONLY role)
+Task: Perform a completely independent review of the following code changes
+against the design specification.
+
+CRITICAL: You are an independent validator. You have NOT participated in any
+prior review of this code. You have NOT seen any prior review history.
+Your job is to find problems that a collaborative, iterative review process
+is likely to miss.
+
+Collaborative code reviews tend to focus on whether the code matches the spec
+and whether previously identified issues are fixed. They often miss:
+
+- Unhandled error paths and failure modes
+- Security vulnerabilities (injection, path traversal, race conditions)
+- Deployment and rollback risks
+- Deviations from the spec that were silently accepted
+- Resource leaks and cleanup paths
+- Edge cases in input validation and boundary conditions
+- Cross-cutting concerns (logging, monitoring, graceful degradation)
+
+Constraints:
+- You MUST NOT modify any files except your review output file
+- Do not modify source code, tests, specs, or configuration
+- Do not run git commit, git add, or any git write operations
+- Do NOT reference or assume knowledge of any prior review rounds
+- Do NOT read or access any files under specs/reviews/ (including
+  specs/reviews/design/, specs/reviews/code/, and specs/reviews/validation/)
+  or .claude/. Your review must be based solely on the design document,
+  code diff, and task description provided in this prompt.
+
+Output requirements:
+- Each issue: severity (critical/high/medium/low), description, recommendation
+- For each issue, include a judgement: "likely missed by iterative review because: ..."
+- Write ONLY to specs/reviews/validation/code-{{ROUND}}-review.md
+
+The runtime context is appended below.
+```
+
+### 3. New file: `review-loop/prompts/validation-fix.md`
+
+Prompt for Codex to fix issues found by independent validation during the code stage.
+
+```markdown
+Role: Code implementer
+Task: Fix the issues identified by independent validation review.
+
+IMPORTANT: These issues were found by an independent reviewer who examined the
+code with fresh eyes, without any prior review context. They represent blind
+spots that the regular review process missed. Treat them seriously.
+
+The validation review and Claude's review are included below. If a "Previous
+Claude Fix Review" section is present, it is the authoritative guide for what
+still needs fixing — it supersedes the initial triage. Otherwise, follow the
+initial Claude triage review. For each fix:
+- Explain what you changed and why
+- Ensure the fix does not introduce regressions
+
+Constraints:
+- Do not modify specs/design.md, specs/brainstorm.md, or anything under specs/reviews/
+  except your designated output file
+- Do not modify .claude/* except session-scoped runtime files
+- Do not run git commit, git add, or any git write operations
+- Do not invoke brainstorming skills
+
+Write your response to specs/reviews/validation/code-{{ROUND}}-codex-response.md
+
+The runtime context is appended below.
+```
+
+### 4. New file: `review-loop/prompts/validation-design-fix.md`
+
+Prompt for Codex to review design fixes made in response to independent validation findings.
 
 ```markdown
 Role: Independent design auditor (READ-ONLY role)
-Task: Perform a complete, independent audit of the following design document.
+Task: Review the design document after it was updated to address findings from
+an independent validation review.
+
+The validation review that triggered these changes is included below. Verify
+that the identified issues have been properly addressed and check for any new
+issues introduced by the fixes.
 
 CRITICAL: Every round is a full audit. You must review the entire document as
-if seeing it for the first time. Previous review context (if provided below)
-is supplementary — use it only to verify that previously identified issues
-were addressed, but you MUST also examine all other aspects of the document
-for new issues. Do NOT limit your review scope to previously raised issues.
+if seeing it for the first time. The validation findings below are context for
+understanding what was changed, but you MUST also examine all other aspects of
+the document for new issues.
 
 Audit criteria:
 - Requirements completeness: all use cases and edge cases covered
@@ -29,7 +210,7 @@ Audit criteria:
 - Security: potential vulnerabilities
 - Testability: can the design be verified
 - Interface consistency: naming, payload shapes, list/detail parity
-- Completeness of new additions: changes addressing prior feedback may
+- Completeness of fixes: changes addressing validation feedback may
   introduce new gaps
 
 Constraints:
@@ -39,397 +220,430 @@ Constraints:
 
 Output requirements:
 - Each issue: severity (critical/high/medium/low), description, recommendation
-- For regular rounds (with prior context): separate "previously identified
-  (now fixed/still open)" from "newly identified" issues
-- For verify rounds (no prior context): report all findings as fresh — do not
-  attempt to classify issues as "previously identified" since no prior context
-  is available
-- Write ONLY to specs/reviews/design/round-{{ROUND}}-codex-review.md
+- Separate "validation issues (now fixed/still open)" from "newly identified" issues
+- Write ONLY to specs/reviews/validation/design-{{ROUND}}-codex-review.md
 
 The runtime context is appended below.
 ```
 
-Key additions:
-- CRITICAL full-audit mandate at the top
-- Two new audit criteria: interface consistency, completeness of new additions
-- Output format with conditional section split: regular rounds separate old/new issues, verify rounds report all findings as fresh
+### 5. Modified: `review-loop/scripts/common.sh`
 
-### 2. `review-loop/scripts/common.sh` — `build_prompt()` changes
-
-**Current state**: `build_prompt()` always includes previous round context for both regular and verify rounds.
-
-**Changes**: Add verify-round detection that strips prior review context and prepends a fresh-review header.
-
-The change applies only to the `design-review` case within `build_prompt()`. The `code-fix` case is unchanged because code-stage verification is Claude-only (see section 3.D) — `code-fix verify` is never called.
+#### `validate_mode()` — add 4 new modes
 
 ```bash
-# In the design-review case:
-if [[ "$round" == "verify" ]]; then
-  # Verify round: prepend independent review header, skip ALL prior context
-  printf '\n## FULL INDEPENDENT REVIEW\n'
-  printf 'This is a final verification pass. You MUST perform a complete,\n'
-  printf 'independent review of the entire document from scratch. Ignore all\n'
-  printf 'prior review history. Review as if seeing this document for the\n'
-  printf 'first time.\n'
-else
-  # Regular round: include previous round context (existing behavior)
-  previous_round="$(review_loop::previous_round_for_pair ...)"
-  if [[ -n "$previous_round" ]]; then
-    review_loop::append_file_section "Previous Codex Review" ...
-    review_loop::append_file_section "Previous Claude Response" ...
+review_loop::validate_mode() {
+  local mode="$1"
+  case "$mode" in
+    design-review|code-implement|code-fix|\
+    independent-design-review|independent-code-review|\
+    validation-fix|validation-design-fix)
+      ;;
+    *)
+      printf 'Unsupported mode: %s\n' "$mode" >&2
+      exit 1
+      ;;
+  esac
+}
+```
+
+#### `validate_round()` — accept validation round tokens
+
+```bash
+review_loop::validate_round() {
+  local round="$1"
+  if review_loop::is_integer "$round"; then
+    if (( round >= 1 && round <= 5 )); then
+      return 0
+    fi
   fi
-fi
+  if [[ "$round" == "verify" ]]; then
+    return 0
+  fi
+  if [[ "$round" =~ ^c[12]$ ]]; then
+    return 0
+  fi
+  if [[ "$round" =~ ^c[12]f[12]$ ]]; then
+    return 0
+  fi
+  printf 'Unsupported round: %s\n' "$round" >&2
+  exit 1
+}
 ```
 
-The `code-fix` case remains unchanged — only regular rounds (1-5) are used.
+#### `expected_output_path()` — add 4 new cases
 
-Note: The `validate_round()` function already accepts `"verify"` as a valid round value — no change needed there. While `code-fix verify` is technically callable via the shell interface, it is not invoked by the workflow. Adding validation to restrict it is out of scope for v2.1.
+```bash
+independent-design-review)
+  printf 'specs/reviews/validation/design-%s-review.md\n' "$round"
+  ;;
+independent-code-review)
+  printf 'specs/reviews/validation/code-%s-review.md\n' "$round"
+  ;;
+validation-fix)
+  printf 'specs/reviews/validation/code-%s-codex-response.md\n' "$round"
+  ;;
+validation-design-fix)
+  printf 'specs/reviews/validation/design-%s-codex-review.md\n' "$round"
+  ;;
+```
 
-### 3. `review-loop/commands/review-loop.md`
+#### New helper: `append_diff_section()`
 
-**Current state**: Two-stage workflow (design + code) with no brainstorming or fresh-review instructions.
+Assembles a diff that includes both tracked changes and untracked new files, matching the semantics of the regular code review path. Uses a temporary index to avoid mutating the real staging area.
 
-**Changes**:
+```bash
+review_loop::append_diff_section() {
+  local title="$1"
+  local baseline_sha="$2"
+  local diff
+  local tmp_index
 
-#### A. Add optional brainstorming stage (after branch creation)
+  # Create a temporary index to stage all changes without affecting the real index
+  tmp_index="$(mktemp "${TMPDIR:-/tmp}/review-loop-diff-idx.XXXXXX")"
+  trap "rm -f '$tmp_index'" RETURN
 
-Insert a new section between "State and branch" and "Design stage". Brainstorming runs **after** the session branch is created to maintain branch isolation:
+  # Copy current HEAD tree into temp index, then add all working tree changes
+  GIT_INDEX_FILE="$tmp_index" git read-tree HEAD
+  GIT_INDEX_FILE="$tmp_index" git add -A -- ':!specs/reviews/' ':!specs/brainstorm.md' ':!.claude/'
+
+  diff="$(GIT_INDEX_FILE="$tmp_index" git diff --cached "$baseline_sha" -- ':!specs/reviews/' ':!specs/brainstorm.md' ':!.claude/')"
+  rm -f "$tmp_index"
+  trap - RETURN
+
+  [[ -n "$diff" ]] || return 0
+  printf '\n## %s\n```diff\n%s\n```\n' "$title" "$diff"
+}
+```
+
+#### New helper: `validation_cycle_from_round()`
+
+```bash
+review_loop::validation_cycle_from_round() {
+  local round="$1"
+  printf '%s\n' "${round:1:1}"
+}
+```
+
+#### `build_prompt()` — add 4 new cases
+
+```bash
+independent-design-review)
+  # Zero review history — only design doc (already appended) and task
+  # Do NOT append any files from specs/reviews/
+  ;;
+independent-code-review)
+  # Zero review history — design doc (already appended) + code diff
+  local baseline_sha
+  baseline_sha="$(review_loop::read_state_field "baseline_sha" || true)"
+  if [[ -n "$baseline_sha" ]]; then
+    review_loop::append_diff_section "Code Changes" "$baseline_sha"
+  fi
+  ;;
+validation-fix)
+  # Include: validation review + Claude's triage + per-fix-round Claude review + code diff
+  local baseline_sha cycle
+  baseline_sha="$(review_loop::read_state_field "baseline_sha" || true)"
+  cycle="$(review_loop::validation_cycle_from_round "$round")"
+  review_loop::append_file_section "Validation Review" \
+    "$project_root/specs/reviews/validation/code-c${cycle}-review.md"
+  review_loop::append_file_section "Claude Triage Review" \
+    "$project_root/specs/reviews/validation/code-c${cycle}-claude-review.md"
+  # For fix round 2: include Claude's round-1 review and Codex's round-1 response
+  if [[ "$round" == "c${cycle}f2" ]]; then
+    review_loop::append_file_section "Previous Claude Fix Review" \
+      "$project_root/specs/reviews/validation/code-c${cycle}f1-claude-review.md"
+    review_loop::append_file_section "Previous Fix Response" \
+      "$project_root/specs/reviews/validation/code-c${cycle}f1-codex-response.md"
+  fi
+  if [[ -n "$baseline_sha" ]]; then
+    review_loop::append_diff_section "Code Changes" "$baseline_sha"
+  fi
+  ;;
+validation-design-fix)
+  # Include: validation review + Claude's response + design doc (already appended)
+  local cycle
+  cycle="$(review_loop::validation_cycle_from_round "$round")"
+  review_loop::append_file_section "Validation Findings" \
+    "$project_root/specs/reviews/validation/design-c${cycle}-review.md"
+  review_loop::append_file_section "Claude Validation Response" \
+    "$project_root/specs/reviews/validation/design-c${cycle}-response.md"
+  # For fix round 2: include previous fix review
+  if [[ "$round" == "c${cycle}f2" ]]; then
+    review_loop::append_file_section "Previous Fix Review" \
+      "$project_root/specs/reviews/validation/design-c${cycle}f1-codex-review.md"
+  fi
+  ;;
+```
+
+### 6. Modified: `review-loop/commands/review-loop.md`
+
+**IMPORTANT**: The existing verify round steps (design step 3, code step 6) and terminal output steps (design step 4, code step 7) in `review-loop.md` must be **replaced** with the new end-to-end algorithms below — not merely preceded by validation insertions. The new algorithms incorporate validation, verify, and output into a single coherent flow per stage.
+
+#### A. Design stage — replace steps 3-4 with validation + verify + output
+
+Replace the existing design stage verify round and "Design stage complete" output with:
 
 ```markdown
-## Brainstorming (optional)
+## Design stage — independent validation
 
-After the session branch is created and checked out:
+After the regular design review loop converges:
 
-0. Check if `superpowers:brainstorming` is listed in the available skills
-   (visible in system-reminder messages at conversation start).
-   a. If available:
-      - Ask the user: "Brainstorming skill is available. Would you like to
-        brainstorm before designing?" Wait for explicit opt-in.
-      - If the user opts in:
-        - Invoke the brainstorming skill with the user's task description
-        - Save output to `specs/brainstorm.md` (on the session branch).
-          Do NOT include secrets, credentials, API keys, or sensitive data in
-          brainstorm output — this file will be committed to the branch.
-        - Wait for user confirmation that brainstorming output is acceptable
-        - Only after user confirms: set `brainstorm_done: true` in
-          `.claude/review-loop.local.md`
-        - IMPORTANT: Do NOT invoke `superpowers:brainstorming` again for the
-          remainder of this workflow. All other superpowers skills remain available.
-      - If the user declines:
-        - Skip directly to the design stage
-        - `brainstorm_done` stays `false`
-   b. If not available:
-      - Skip directly to the design stage
-      - The user's task description is the sole input
+For each validation cycle from 1 to 2:
+  1. Snapshot the worktree (same PRE_* procedure as regular rounds).
+  2. Execute `review-loop/scripts/run-review-bg.sh independent-design-review c<cycle>`.
+  3. Poll with `review-loop/scripts/check-review.sh`.
+  4. Revert unauthorized file deltas. Allowed new file:
+     `specs/reviews/validation/design-c<cycle>-review.md`.
+  5. On TIMEOUT or FAILED: retry once, then skip this cycle on second failure.
+     Log the failure to `.claude/review-loop.log`.
+     Set `validation_skipped = true` for this stage.
+  6. If the review file does not exist after step 5, skip to next cycle.
+  7. Read `specs/reviews/validation/design-c<cycle>-review.md`.
+  8. If no substantive issues → validation passed, exit the validation loop.
+  9. If substantive issues found:
+     a. Claude updates `specs/design.md` to address the findings.
+     b. Claude writes `specs/reviews/validation/design-c<cycle>-response.md`.
+     c. Enter a fix review loop (max 2 rounds):
+        - Snapshot the worktree.
+        - Execute `run-review-bg.sh validation-design-fix c<cycle>f<fix-round>`.
+        - Poll with `check-review.sh`.
+        - On TIMEOUT or FAILED: retry once, then skip this fix round on second failure.
+          Log the failure. Treat unresolved fix rounds as unresolved validation findings.
+        - Revert unauthorized file deltas. Allowed new file:
+          `specs/reviews/validation/design-c<cycle>f<fix-round>-codex-review.md`.
+        - If the review file does not exist, treat fix loop as converged (best-effort).
+        - Read the review. If no substantive issues → fix loop converges.
+        - Otherwise Claude updates design.md and continues.
+     d. Continue to the next validation cycle.
+
+If 2 validation cycles complete and the last cycle still had substantive issues,
+set `unresolved_validation = true`.
+
+## Design stage — verify round
+
+Verify round trigger: run if (regular loop used all 5 rounds AND last round
+changed design) OR (any validation cycle changed design).
+
+If triggered:
+  - Snapshot the worktree (same PRE_* procedure).
+  - Execute `run-review-bg.sh design-review verify`.
+  - Poll with `check-review.sh`.
+  - Revert unauthorized file deltas. Allowed new file:
+    `specs/reviews/design/round-verify-codex-review.md`.
+  - Retry once on TIMEOUT or FAILED, then skip on second failure.
+  - Read `specs/reviews/design/round-verify-codex-review.md`.
+  - Do NOT make further design edits regardless of findings.
+  - Write `specs/reviews/design/round-verify-claude-response.md`.
+
+## Design stage — terminal output
+
+If `unresolved_validation` OR `validation_skipped`:
+  Output exactly: `Design stage complete with unresolved validation findings.
+  Review specs/design.md and specs/reviews/validation/ before confirming.`
+Otherwise:
+  Output exactly: `Design stage complete. Review specs/design.md and confirm.`
+
+Wait for the user before entering the code stage.
 ```
 
-#### B. Update design stage to use brainstorm.md
+#### B. Code stage — replace steps 6-7 with validation + verify + output
 
-The design stage uses `specs/brainstorm.md` as **supplementary context**, not as a replacement for the user's task. Usage is gated on whether the **current session** generated brainstorm output:
+Replace the existing code stage verify round and "Implementation complete" output with:
 
 ```markdown
-4. Write `specs/design.md`:
-   - Always use the task description from the state file as the authoritative input.
-   - If brainstorming ran in this session (i.e., `brainstorm_done: true` in state file)
-     AND `specs/brainstorm.md` exists, use it as supplementary context that expands
-     on the task. If the brainstorm conflicts with the task description, the task
-     description takes precedence.
-   - If brainstorming was skipped or `specs/brainstorm.md` does not exist, use the
-     task description alone.
-   - A pre-existing `specs/brainstorm.md` from a previous session is ignored unless
-     `brainstorm_done: true` is set for the current session.
+## Code stage — independent validation
+
+After the regular code review loop converges:
+
+For each validation cycle from 1 to 2:
+  1. Snapshot the worktree (same PRE_* procedure as regular rounds).
+  2. Execute `review-loop/scripts/run-review-bg.sh independent-code-review c<cycle>`.
+  3. Poll with `review-loop/scripts/check-review.sh`.
+  4. Revert unauthorized file deltas. Allowed new file:
+     `specs/reviews/validation/code-c<cycle>-review.md`.
+  5. On TIMEOUT or FAILED: retry once, then skip this cycle on second failure.
+     Log the failure. Set `validation_skipped = true`.
+  6. If the review file does not exist after step 5, skip to next cycle.
+  7. Read `specs/reviews/validation/code-c<cycle>-review.md`.
+  8. If no substantive issues → validation passed, exit the validation loop.
+  9. If substantive issues found:
+     a. Claude writes `specs/reviews/validation/code-c<cycle>-claude-review.md`
+        triaging which issues require fixes.
+     b. Enter a fix loop (max 2 rounds):
+        - Snapshot the worktree.
+        - Execute `run-review-bg.sh validation-fix c<cycle>f<fix-round>`.
+        - Poll with `check-review.sh`.
+        - On TIMEOUT or FAILED: retry once, then skip this fix round on second failure.
+          Log the failure. Treat unresolved fix rounds as unresolved validation findings.
+        - Revert unauthorized changes to protected paths.
+          Allowed: project source + test files,
+          `specs/reviews/validation/code-c<cycle>f<fix-round>-codex-response.md`.
+        - If the response file does not exist, treat fix loop as converged (best-effort).
+        - Read the Codex response.
+        - Claude writes `specs/reviews/validation/code-c<cycle>f<fix-round>-claude-review.md`
+          reviewing the full diff. This review becomes the authoritative context for
+          the next fix round — it supersedes the initial triage for directing Codex.
+        - If no substantive issues → fix loop converges.
+        - Otherwise continue.
+     c. Continue to the next validation cycle.
+
+If 2 validation cycles complete and the last cycle still had issues,
+set `unresolved_validation = true`.
+
+## Code stage — verify round
+
+Verify round trigger: run if (regular loop used all 5 rounds AND last round
+required code changes) OR (any validation cycle required code changes).
+
+If triggered:
+  - Write `specs/reviews/code/round-verify-claude-review.md` with a full
+    independent review of the diff and no reference to prior rounds.
+  - This is a Claude-only review. Do NOT invoke Codex or perform additional iterations.
+
+## Code stage — terminal output
+
+If `unresolved_validation` OR `validation_skipped`:
+  Output exactly: `Implementation complete with unresolved validation findings.
+  Review specs/reviews/validation/ for details.
+  All changes on branch review-loop/<session-id>.`
+Otherwise:
+  Output exactly: `Implementation complete. All changes on branch review-loop/<session-id>.`
 ```
 
-#### C. Add verify round orchestration to design stage
-
-The design stage verify step is a Codex review pass that uses the **same snapshot, allowed-file, rollback, logging, and retry procedure** as regular design-review rounds. The only differences are: no prior context in the prompt, and the allowed output file is `round-verify-codex-review.md`.
-
-```markdown
-3. If all 5 rounds were used and the last round changed `specs/design.md`,
-   perform one final verification pass:
-   - Snapshot the worktree (same PRE_* variables as regular rounds)
-   - Execute `review-loop/scripts/run-review-bg.sh design-review verify`
-   - Poll with `review-loop/scripts/check-review.sh`
-   - Revert unauthorized file deltas (allowed new file: `specs/reviews/design/round-verify-codex-review.md`)
-   - Retry once on TIMEOUT or FAILED, then skip on second failure
-   - Read `specs/reviews/design/round-verify-codex-review.md`
-   - Do NOT make further design edits regardless of findings
-   - Write `specs/reviews/design/round-verify-claude-response.md`
-```
-
-#### D. Code stage verify is Claude-only
-
-The code stage verify step is a **Claude-only review**. There is no `code-fix verify` invocation — this avoids reusing an editing prompt for a no-more-edits step:
-
-```markdown
-6. If all 5 review rounds are exhausted and the last round required code changes,
-   perform one final review-only verification pass:
-   - Write `specs/reviews/code/round-verify-claude-review.md` with a full
-     independent review of the diff (no reference to prior rounds)
-   - This is the final artifact. Do NOT invoke Codex or perform additional iterations.
-```
-
-The `code-fix` case in `build_prompt()` is unchanged — no verify branch is added or removed. Code-stage verification is Claude-only, so `code-fix verify` is never invoked by the workflow. The shell interface technically permits `code-fix verify` calls, but this is tolerated as out of scope for v2.1 (see section 2 and Implementation Notes).
-
-#### E. Add fresh-review instructions for code stage
-
-Add to the code stage section:
-
-```markdown
-CRITICAL: Each round must be a full, independent review of the entire diff
-against the spec. Do NOT narrow scope to only issues from previous rounds.
-Previous findings may have been fixed but new issues may have been introduced.
-Review as if seeing the code for the first time each round.
-
-Final verification must be a completely unconstrained full review — ignore
-all prior review history and review as if seeing the code for the first time.
-```
-
-#### F. Update stage transition commit
-
-The `git add` for stage transition conditionally includes `specs/brainstorm.md`:
+#### C. Stage transition — include validation artifacts (conditional)
 
 ```markdown
 1. If `brainstorm_done: true` AND `specs/brainstorm.md` exists: `git add specs/brainstorm.md`
 2. `git add specs/design.md specs/reviews/design/ .claude/review-loop.log`
-3. `git commit -m "review-loop: design stage complete (<session-id>)"`
+3. If `specs/reviews/validation/` exists (directory): `git add specs/reviews/validation/`
+4. `git commit -m "review-loop: design stage complete (<session-id>)"`
 ```
 
-Staging of `specs/brainstorm.md` is gated on both the session flag and file existence. A stale brainstorm file from a previous session (where `brainstorm_done: false`) is never staged.
+#### D. Protected paths
 
-#### G. Add specs/brainstorm.md to code-stage protected paths
+Validation review files (`specs/reviews/validation/*-review.md` and `specs/reviews/validation/*-claude-review.md`) are protected during fix rounds. Only the designated output file for the current round is allowed.
 
-Update the code stage's protected-path rollback logic:
+### 7. Modified: `review-loop/AGENTS.md`
+
+Add after "Code stage":
 
 ```markdown
-- Protected paths: `specs/design.md`, `specs/brainstorm.md`, everything under
-  `specs/reviews/`, and any `.claude/*` path that is not session-scoped runtime state
+## Independent validation
+
+- Runs after each stage's regular review loop converges, before the verify round.
+- Uses a fresh Codex instance with zero shared review history.
+- Codex must only write the current round's output file under `specs/reviews/validation/`.
+- Do NOT read or access any files under specs/reviews/ (including design/, code/,
+  and validation/) or .claude/. Review must be based solely on the artifacts
+  provided in the prompt.
+- The validation prompt is intentionally different from regular review prompts,
+  focusing on blind spots that collaborative review tends to miss.
+- If validation finds issues, they are fed back into a fix loop
+  (max 2 rounds per cycle, max 2 cycles per stage).
+- Validation review files are protected — fix rounds must not modify them.
+- Do not invoke brainstorming skills.
 ```
 
-Also update the staging exclusions:
+### 8. Modified: `tests/review-loop.test.sh`
 
-```markdown
-- `git add -A -- ':!specs/reviews/' ':!specs/brainstorm.md' ':!.claude/'`
-- Review `git diff --staged $BASELINE_SHA -- ':!specs/reviews/' ':!specs/brainstorm.md' ':!.claude/'`
+#### New test cases (19 total)
+
+1. `test_independent_design_review_prompt_no_review_history` — `build_prompt independent-design-review c1` with existing review files; assert no review history leaks
+2. `test_independent_design_review_prompt_includes_design_and_task` — assert design.md content and task present
+3. `test_independent_code_review_prompt_includes_diff` — set up git repo with baseline_sha, make changes (including new untracked files), assert `## Code Changes` section contains diff including new files
+4. `test_independent_code_review_prompt_no_review_history` — assert no `specs/reviews/code/` or `specs/reviews/validation/` content leaks in
+5. `test_validation_fix_prompt_includes_validation_and_triage` — assert both validation review and Claude triage review present in `c1f1` prompt
+6. `test_validation_fix_prompt_round_2_includes_previous_response` — assert `c1f2` prompt includes previous Claude fix review and Codex response from `c1f1`
+7. `test_validation_design_fix_prompt_includes_validation_findings` — assert `c1f1` prompt contains validation findings
+8. `test_validation_output_paths` — assert correct paths for all 4 new modes
+9. `test_validate_round_accepts_validation_tokens` — assert `c1`, `c2`, `c1f1`, `c1f2`, `c2f1`, `c2f2` accepted; `c3`, `c1f3`, `c0` rejected
+10. `test_run_review_bg_independent_design_review` — end-to-end with fake codex, round `c1`
+11. `test_run_review_bg_validation_fix` — end-to-end with fake codex, round `c1f1`
+12. `test_validation_skip_on_double_failure` — fake codex exits non-zero, no output; verify cycle treated as skipped
+13. `test_validation_cycle_2_uses_distinct_artifacts` — run `independent-design-review c2`; assert output path uses `c2` prefix, not `c1`
+14. `test_append_diff_section_includes_untracked_files` — create new untracked file, call `append_diff_section`; assert new file appears in diff output
+15. `test_validation_fix_c2f1_prompt` — build prompt for `validation-fix c2f1`; assert it reads from `code-c2-review.md` and `code-c2-claude-review.md`
+16. `test_run_review_bg_independent_code_review` — end-to-end with fake codex, round `c1`; assert sentinel, output, and diff in prompt
+17. `test_run_review_bg_validation_design_fix` — end-to-end with fake codex, round `c1f1`; assert validation findings in prompt
+18. `test_validation_design_fix_prompt_includes_claude_response` — assert `c1f1` prompt contains Claude's validation response (`design-c1-response.md`)
+19. `test_check_review_with_validation_round_tokens` — call `check-review.sh` with composite validation tokens (`c1`, `c1f1`); assert correct status reporting
+
+### No changes to
+
+- `review-loop/scripts/run-review-bg.sh` — new modes flow through existing infrastructure
+- `review-loop/scripts/check-review.sh` — already mode-agnostic
+- `review-loop/scripts/kill-review.sh` — already session-agnostic
+- `review-loop/hooks/hooks.json` — no hook changes
+- `review-loop/commands/cancel-review.md` — validation cancellation uses existing behavior
+- State file schema — no new fields; validation is a synchronous sub-phase
+
+## Review Artifact Layout
+
+```
+specs/reviews/
+  design/                                        # existing — regular design review
+    round-1-codex-review.md
+    round-1-claude-response.md
+    ...
+  code/                                          # existing — regular code review
+    round-1-claude-review.md
+    round-1-codex-response.md
+    ...
+  validation/                                    # new — independent validation
+    design-c1-review.md                          # validation of design (cycle 1)
+    design-c1-response.md                        # Claude's response (cycle 1)
+    design-c1f1-codex-review.md                  # fix review round 1 (cycle 1)
+    design-c1f2-codex-review.md                  # fix review round 2 (cycle 1)
+    design-c2-review.md                          # validation of design (cycle 2)
+    code-c1-review.md                            # validation of code (cycle 1)
+    code-c1-claude-review.md                     # Claude's initial triage (cycle 1)
+    code-c1f1-codex-response.md                  # Codex fix response (cycle 1, fix 1)
+    code-c1f1-claude-review.md                   # Claude review after fix 1 (cycle 1)
+    code-c1f2-codex-response.md                  # Codex fix response (cycle 1, fix 2)
+    code-c2-review.md                            # validation of code (cycle 2)
 ```
 
-#### H. Update state file to record starting branch and brainstorm status
+## Context Isolation
 
-Add `start_branch` and `brainstorm_done` fields:
+Context isolation for independent validation is enforced at two layers:
 
-```yaml
----
-active: true
-session_id: ...
-phase: design
-round: null
-started_at: ...
-branch: review-loop/<session-id>
-start_branch: main                    # git rev-parse --abbrev-ref HEAD (may be "HEAD" if detached)
-start_sha: abc123                     # git rev-parse HEAD (immutable starting commit)
-baseline_sha: null
-brainstorm_done: false                # set to true only if brainstorming ran in this session
-task: "..."
----
-```
+1. **Prompt-assembly layer**: `build_prompt()` for `independent-design-review` and `independent-code-review` modes does not inject any files from `specs/reviews/` (including `specs/reviews/validation/` from prior cycles) or `.claude/`. Only the design document, task description, and (for code review) the code diff are included.
 
-#### I. Update cancellation flow
+2. **Prompt-instruction layer**: The prompt templates explicitly prohibit the validator from reading or accessing any files under `specs/reviews/` (all three subdirectories: `design/`, `code/`, `validation/`) or `.claude/`. This instruction is reinforced in `AGENTS.md`.
 
-Cancellation must read `start_branch` **before** `kill-review.sh` deletes the state file.
-
-In `review-loop/commands/review-loop.md`:
-
-```markdown
-## Cancellation
-
-If the user asks to cancel at any point:
-1. Read `start_branch`, `start_sha`, and `session_id` from `.claude/review-loop.local.md`
-2. Run `review-loop/scripts/kill-review.sh <session-id>`
-   (this kills the process and removes runtime files + state file)
-3. Discard all uncommitted session changes: `git reset -- . && git checkout -- . && git clean -fd`
-4. Check out the starting point:
-   - If `start_branch` is not `HEAD`: `git checkout <start_branch>`
-   - If `start_branch` is `HEAD` (detached): `git checkout --detach <start_sha>`
-5. Delete the session branch: `git branch -D review-loop/<session-id>`
-
-Cancellation means "discard session work." All uncommitted changes are discarded
-before branch restoration. Committed work on the session branch is lost when the
-branch is deleted.
-```
-
-In `review-loop/commands/cancel-review.md` (new change):
-
-```markdown
-## Steps
-
-1. Read `.claude/review-loop.local.md` and extract `session_id`, `start_branch`, and `start_sha`.
-2. Run `review-loop/scripts/kill-review.sh <session_id>`.
-3. Discard uncommitted changes: `git reset -- . && git checkout -- . && git clean -fd`.
-4. Restore starting point:
-   - If `start_branch` is not `HEAD`: `git checkout <start_branch>`
-   - If `start_branch` is `HEAD`: `git checkout --detach <start_sha>`
-5. Delete the session branch: `git branch -D review-loop/<session-id>`.
-6. Tell the user which runtime files were cleaned up and which audit artifacts
-   remain in `specs/reviews/`.
-```
-
-**Hook-driven cancellation**: The Stop hook calls `kill-review.sh --from-hook`, which deletes the state file immediately. This means hook-driven cancellation does **not** restore `start_branch` or delete the session branch — it only kills the background process and cleans up runtime files. Branch restoration requires explicit cancellation via `/cancel-review` or the cancel flow in `review-loop.md`. This is acceptable because:
-- Hook-driven cleanup happens when the Claude Code session ends (not mid-workflow)
-- The user can manually switch branches after session end
-- Attempting branch operations in a hook is fragile and can conflict with user actions
-
-**Detached HEAD**: The startup checks in `review-loop.md` require a clean worktree but do not require a local branch. `start_branch` stores the output of `git rev-parse --abbrev-ref HEAD` (returns `HEAD` when detached), and `start_sha` stores the immutable commit SHA via `git rev-parse HEAD`. On cancellation from detached HEAD, restoration uses `git checkout --detach <start_sha>` to return to the exact starting commit.
-
-#### J. Update state file phase
-
-The `phase` field uses only three values that the command prompt actually persists:
-
-```markdown
-phase: design    # design | code | done
-```
-
-The brainstorming step is interactive and completes before the design loop begins — it does not need its own persisted phase.
-
-#### K. Update description frontmatter
-
-Change from "v2" to "v2.1":
-```yaml
-description: Drive the review-loop v2.1 design and code collaboration flow
-```
-
-### 4. `review-loop/AGENTS.md`
-
-**Current state**: Documents two-stage workflow (design + code).
-
-**Changes**: Add brainstorming stage documentation and brainstorming-suppression note for Codex sessions.
-
-```markdown
-# review-loop Agents
-
-This plugin coordinates Claude Code and Codex in an optional three-stage workflow.
-
-## Brainstorming stage (optional)
-
-- Runs after branch creation if `superpowers:brainstorming` is available.
-- Claude Code invokes the brainstorming skill to explore requirements and constraints.
-- Output saved to `specs/brainstorm.md` on the session branch.
-- Once complete, `superpowers:brainstorming` is suppressed for the rest of the workflow.
-
-## Design stage
-
-- Claude Code is the author.
-- Codex is a read-only auditor.
-- Codex must only write the current round review file under `specs/reviews/design/`.
-- Each review round is a full, independent audit — reviewers must not narrow scope
-  to previously raised issues only.
-- Verify rounds receive no prior review context to ensure fresh perspective.
-- Do not invoke brainstorming skills — brainstorming has already been completed
-  or was intentionally skipped.
-
-## Code stage
-
-- Codex is the implementer.
-- Claude Code is the reviewer.
-- Codex must not modify `specs/design.md` or `specs/brainstorm.md`.
-- Codex must not modify `.claude/` except session-scoped runtime files and the
-  current `specs/reviews/code/round-*-codex-response.md` file when asked to
-  answer review feedback.
-- Each review round is a full, independent review of the entire diff against spec.
-- Final verification is Claude-only (no Codex invocation).
-- Do not invoke brainstorming skills — brainstorming has already been completed
-  or was intentionally skipped.
-
-## General constraints
-
-- Never commit, stage, or reset git state from Codex prompts.
-- Keep context limited to the current design plus the current review loop artifacts.
-- Preserve all review files as audit records.
-- Shared shell helpers live in `review-loop/scripts/common.sh`; runtime scripts
-  source it for state lookup, session file paths, and prompt assembly.
-- `REVIEW_LOOP_TIMEOUT_SECONDS` may be set for testing or debugging to override
-  the default 1200 second watchdog timeout.
-```
-
-### 5. `review-loop/prompts/code-implement.md` (new change)
-
-Add brainstorming-suppression instruction to the existing prompt:
-
-```markdown
-Do not invoke brainstorming skills. Brainstorming has already been completed
-or was intentionally skipped for this session.
-```
-
-### 6. `review-loop/prompts/code-fix.md` (new change)
-
-Add the same brainstorming-suppression instruction:
-
-```markdown
-Do not invoke brainstorming skills. Brainstorming has already been completed
-or was intentionally skipped for this session.
-```
-
-### 7. `review-loop/commands/cancel-review.md` (new change)
-
-Update cancellation to restore starting branch and delete session branch:
-
-```markdown
-## Steps
-
-1. Read `.claude/review-loop.local.md` and extract `session_id`, `start_branch`, and `start_sha`.
-2. Run `review-loop/scripts/kill-review.sh <session_id>`.
-3. Discard uncommitted changes: `git reset -- . && git checkout -- . && git clean -fd`.
-4. Restore starting point:
-   - If `start_branch` is not `HEAD`: `git checkout <start_branch>`
-   - If `start_branch` is `HEAD`: `git checkout --detach <start_sha>`
-5. Delete the session branch: `git branch -D review-loop/<session-id>`.
-6. Tell the user which runtime files were cleaned up and which audit artifacts
-   remain in `specs/reviews/`.
-```
-
-### 8. `tests/review-loop.test.sh` (new change)
-
-Update existing tests and add new test cases for v2.1 contracts:
-
-**Update existing tests:**
-- Tests asserting verify-round prompt includes prior context → update to assert verify strips prior context and prepends FULL INDEPENDENT REVIEW header
-- Tests asserting cancel-review.md steps → update for new step order (read state before kill, restore branch, delete branch)
-
-**Add new test cases (prompt-content assertions — testable via shell harness):**
-- `test_design_review_verify_prompt_no_prior_context`: call `build_prompt design-review verify` and assert output does not contain "Previous Codex Review" or "Previous Claude Response", and does contain "FULL INDEPENDENT REVIEW"
-- `test_design_review_regular_prompt_includes_prior_context`: call `build_prompt design-review 2` and assert output includes previous review/response sections (unchanged behavior)
-- `test_brainstorm_md_protected_in_code_stage_exclusions`: verify that the staging exclusion pathspecs documented in the design are used (grep command prompt for `':!specs/brainstorm.md'`)
-
-**Workflow behavior tests (manual verification matrix — not automatable in shell harness):**
-The following behaviors are orchestrated by Claude via markdown command instructions, not by shell scripts. They cannot be tested by the shell harness and are verified via the manual verification matrix in the "Verification Scenarios" section:
-- `brainstorm_done` flag gating brainstorm usage
-- `start_branch` persistence and restoration on cancellation
-- Cancellation flow (read state → kill → restore branch → delete branch)
+**Acknowledged limitation**: Codex runs via `codex exec -C "$project_root" --full-auto` in the full workspace and could technically access any file. True filesystem isolation (e.g., running in a scratch worktree with only allowed files) would provide stronger guarantees but is out of scope for this iteration. The prompt-level prohibition is the pragmatic first step — if validation results show evidence of context leakage in practice, filesystem isolation can be added as a follow-up.
 
 ## Implementation Notes
 
-- No new files are created in the plugin directory (only existing files modified)
-- No changes to `run-review-bg.sh`, `check-review.sh`, `kill-review.sh`, or `hooks.json`
-- The `validate_round()` function in `common.sh` already handles `"verify"` — no change needed
-- The state file adds three new fields: `start_branch`, `start_sha`, and `brainstorm_done`
-- The `phase` field keeps only the three values the command prompt actually persists: `design`, `code`, `done`
-- Brainstorming detection relies on the skills list in system-reminder messages. If this context is unavailable (e.g., truncated conversation), the fallback is to skip brainstorming — the design stage works identically without it.
-- The `superpowers:brainstorming` conflict only affects Claude Code (the orchestrator). Codex background sessions launched via `codex exec` do not have superpowers installed. However, AGENTS.md and Codex prompts explicitly suppress brainstorming as defense-in-depth.
-- Verify rounds use the `verify` round token with `run-review-bg.sh` for design-review only. Code-stage verification is Claude-only — no `code-fix verify` path.
-- The `build_prompt()` function only adds verify-round logic to the `design-review` case. The `code-fix` case is unchanged since `code-fix verify` is never called by the workflow.
-- Hook-driven cancellation (Stop hook → `kill-review.sh --from-hook`) does not restore branches — only explicit `/cancel-review` does. This is by design.
-- `specs/brainstorm.md` usage and staging are both session-scoped via the `brainstorm_done` flag — a leftover brainstorm file from a previous session cannot bleed into a new one and is not staged at transition.
-- `specs/brainstorm.md` is committed at stage transition and preserved (not ephemeral). The brainstorming prompt includes an explicit "no secrets/credentials/API keys" rule. The brainstorming skill itself is interactive and runs under user supervision. These combined controls are proportionate for a session-branch artifact.
+- New modes reuse the existing `run-review-bg.sh` → `check-review.sh` → sentinel flow without modification.
+- The `validate_round()` function is updated to accept composite tokens (`c1`, `c2`, `c1f1`, etc.).
+- The `append_diff_section()` helper uses a temporary git index to include both tracked changes and new untracked files in the diff, matching the semantics of the regular code review path which stages everything before diffing. The temporary index is cleaned up immediately after use.
+- The `validation-design-fix` mode provides a clean mechanism for injecting validation findings and Claude's response into Codex's prompt via `build_prompt()`.
+- The `validation-fix` mode includes: validation review, Claude's initial triage, and (for fix round 2) the previous Claude fix review and Codex response. This ensures Codex always has the latest context.
+- Claude writes per-fix-round review artifacts (`code-c<cycle>f<fix-round>-claude-review.md`) so that fix round 2 of `validation-fix` receives updated context rather than stale initial triage.
+- `specs/reviews/validation/` staging is conditional on directory existence (`[ -d specs/reviews/validation ]`).
+- On double failure (outer validation cycles or inner fix loops), the affected step is skipped, the failure is logged, and the final output message reflects unresolved findings. This avoids both blocking on infrastructure failures and falsely claiming validation passed.
+- Inner fix loops mirror the outer validation cycle's retry/skip/log behavior: retry once on TIMEOUT/FAILED, skip on second failure, log, treat as unresolved.
+- For `validation-fix`, the latest Claude per-fix-round review is authoritative for the next fix round, superseding the initial triage. The prompt template explicitly directs Codex to follow the most recent Claude review when present.
+- The existing verify round and terminal output steps in `review-loop.md` are fully **replaced** (not just preceded by validation insertions) to ensure a single coherent flow per stage.
 
 ## Verification Scenarios
 
-Lightweight manual verification matrix for the new v2.1 branches:
-
-1. **Brainstorming present**: superpowers available → brainstorm.md created → `brainstorm_done: true` set → design uses it as supplementary context → brainstorm.md committed at stage transition → brainstorm.md protected during code stage
-2. **Brainstorming absent**: superpowers not available → no brainstorm.md → `brainstorm_done: false` → design uses task description alone → stage transition skips brainstorm.md → code stage unaffected
-3. **Stale brainstorm.md**: previous session left brainstorm.md → new session has `brainstorm_done: false` → stale file ignored by design stage
-4. **Verify round prompt assembly**: design-review verify → FULL INDEPENDENT REVIEW header, no prior reviews
-5. **Code stage verify**: Claude-only review, no Codex invocation, `round-verify-claude-review.md` written
-6. **Regular round prompt assembly**: round 2+ → includes previous round's review/response pair (unchanged from v2)
-7. **Cancellation with uncommitted changes**: read state, kill review, discard uncommitted changes (`git reset -- . && git checkout -- . && git clean -fd`), restore start_branch/start_sha, delete session branch
-8. **Cancellation from detached HEAD**: start_sha used to restore exact commit; `git checkout --detach <start_sha>`
-9. **Hook-driven cancellation**: kills process and removes runtime files only; does not restore branches
+1. **Design validation passes on first cycle**: regular loop converges → independent-design-review finds no issues → verify round (if applicable) → user gate with standard message
+2. **Design validation finds issues, fixed in one cycle**: validation review has issues → Claude fixes design → fix loop (validation-design-fix) converges → second validation passes → verify round → user gate
+3. **Design validation exhausts 2 cycles**: both cycles find issues → verify round → user gate with "unresolved validation findings" message
+4. **Code validation passes on first cycle**: regular loop converges → independent-code-review finds no issues → verify round (if applicable) → standard completion message
+5. **Code validation finds issues, fixed in one cycle**: validation review has issues → Claude triage → validation-fix → fix loop converges → second validation passes → verify round → completion
+6. **Code validation exhausts 2 cycles**: both cycles find issues → verify round → completion with "unresolved validation findings" message
+7. **Validation prompt isolation**: prompts contain zero content from `specs/reviews/design/`, `specs/reviews/code/`, or `specs/reviews/validation/` (prior cycles); prompt instructions prohibit reading those paths
+8. **Fix loop context**: validation-design-fix includes validation findings; validation-fix includes validation review + Claude triage + per-fix-round Claude review + previous Codex response
+9. **Cancellation during validation**: same as regular cancellation
+10. **Timeout/failure during validation**: retry once, skip on second failure, set `validation_skipped`, log, final message reflects skipped validation
+11. **Validation failure with no artifacts**: stage transition conditional `git add` succeeds; workflow continues
+12. **Artifact naming across cycles**: `c1`/`c2` prefixes, `c<N>f<M>` for fix rounds — no collisions
+13. **Diff includes untracked files**: `append_diff_section` uses temporary index to capture new files
+14. **Cycle 2 independence**: cycle 2 validator cannot access cycle 1 validation artifacts via prompt
+15. **Fix loop failure**: inner fix loop TIMEOUT/FAILED retries once, skips on second failure, logs, sets unresolved
+16. **Design validation response consumed**: `validation-design-fix` prompt includes Claude's validation response
+17. **validation-fix authority**: fix round 2 prompt includes latest Claude fix review which supersedes initial triage
+18. **Verify/output end-to-end**: existing verify and output steps fully replaced (not just preceded) in review-loop.md
