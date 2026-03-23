@@ -36,7 +36,7 @@ Independent validation runs **before** the existing verify round, not after it. 
 ### Design stage — complete algorithm
 
 ```
-1. Regular design review loop (max 5 rounds) → converge
+1. Regular design review loop (max 5 rounds) → converge or exhaust
 2. Independent validation (max 2 cycles)
 3. Verify round trigger: if (regular loop used all 5 rounds AND last round changed design)
    OR (any validation cycle changed design), run verify
@@ -51,7 +51,7 @@ Independent validation runs **before** the existing verify round, not after it. 
 ### Code stage — complete algorithm
 
 ```
-1. Regular code review loop (max 5 rounds) → converge
+1. Regular code review loop (max 5 rounds) → converge or exhaust
 2. Independent validation (max 2 cycles)
 3. Verify round trigger: if (regular loop used all 5 rounds AND last round required code changes)
    OR (any validation cycle required code changes), run Claude-only verify
@@ -217,6 +217,11 @@ Constraints:
 - You MUST NOT modify any files except your review output file
 - Do not modify specs/design.md, source code, tests, or configuration
 - Do not run git commit, git add, or any git write operations
+- Do NOT read or access any files under specs/reviews/design/,
+  specs/reviews/code/, or .claude/. The only specs/reviews/ content you
+  should use is the validation findings provided in this prompt.
+  Do NOT read specs/reviews/validation/ files directly — all relevant
+  validation context is already included in this prompt.
 
 Output requirements:
 - Each issue: severity (critical/high/medium/low), description, recommendation

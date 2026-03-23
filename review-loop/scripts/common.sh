@@ -122,7 +122,9 @@ review_loop::log() {
 review_loop::validate_mode() {
   local mode="$1"
   case "$mode" in
-    design-review|code-implement|code-fix)
+    design-review|code-implement|code-fix|\
+    independent-design-review|independent-code-review|\
+    validation-fix|validation-design-fix)
       ;;
     *)
       printf 'Unsupported mode: %s\n' "$mode" >&2
@@ -140,6 +142,14 @@ review_loop::validate_round() {
   fi
 
   if [[ "$round" == "verify" ]]; then
+    return 0
+  fi
+
+  if [[ "$round" =~ ^c[12]$ ]]; then
+    return 0
+  fi
+
+  if [[ "$round" =~ ^c[12]f[12]$ ]]; then
     return 0
   fi
 
@@ -177,6 +187,18 @@ review_loop::expected_output_path() {
     code-fix)
       printf 'specs/reviews/code/round-%s-codex-response.md\n' "$round"
       ;;
+    independent-design-review)
+      printf 'specs/reviews/validation/design-%s-review.md\n' "$round"
+      ;;
+    independent-code-review)
+      printf 'specs/reviews/validation/code-%s-review.md\n' "$round"
+      ;;
+    validation-fix)
+      printf 'specs/reviews/validation/code-%s-codex-response.md\n' "$round"
+      ;;
+    validation-design-fix)
+      printf 'specs/reviews/validation/design-%s-codex-review.md\n' "$round"
+      ;;
     code-implement)
       return 1
       ;;
@@ -205,6 +227,26 @@ review_loop::append_file_section() {
   printf '```md\n'
   cat "$path"
   printf '\n```\n'
+}
+
+review_loop::append_diff_section() {
+  local title="$1"
+  local baseline_sha="$2"
+  local diff
+  local tmp_index
+
+  tmp_index="$(mktemp "${TMPDIR:-/tmp}/review-loop-diff-idx.XXXXXX")"
+  trap "rm -f '$tmp_index'" RETURN
+
+  GIT_INDEX_FILE="$tmp_index" git read-tree HEAD
+  GIT_INDEX_FILE="$tmp_index" git add -A -- ':!specs/reviews/' ':!specs/brainstorm.md' ':!.claude/'
+  diff="$(GIT_INDEX_FILE="$tmp_index" git diff --cached "$baseline_sha" -- ':!specs/reviews/' ':!specs/brainstorm.md' ':!.claude/')"
+
+  rm -f "$tmp_index"
+  trap - RETURN
+
+  [[ -n "$diff" ]] || return 0
+  printf '\n## %s\n```diff\n%s\n```\n' "$title" "$diff"
 }
 
 review_loop::latest_completed_round() {
@@ -248,6 +290,11 @@ review_loop::previous_round_for_pair() {
   fi
 
   return 1
+}
+
+review_loop::validation_cycle_from_round() {
+  local round="$1"
+  printf '%s\n' "${round:1:1}"
 }
 
 review_loop::build_prompt() {
@@ -306,6 +353,46 @@ review_loop::build_prompt() {
       previous_round="$(review_loop::previous_round_for_pair "$round" "code" "codex-response" || true)"
       if [[ -n "$previous_round" ]]; then
         review_loop::append_file_section "Previous Codex Response" "$project_root/specs/reviews/code/round-$previous_round-codex-response.md"
+      fi
+      ;;
+    independent-design-review)
+      ;;
+    independent-code-review)
+      local baseline_sha
+      baseline_sha="$(review_loop::read_state_field "baseline_sha" || true)"
+      if [[ -n "$baseline_sha" ]]; then
+        review_loop::append_diff_section "Code Changes" "$baseline_sha"
+      fi
+      ;;
+    validation-fix)
+      local baseline_sha
+      local cycle
+      baseline_sha="$(review_loop::read_state_field "baseline_sha" || true)"
+      cycle="$(review_loop::validation_cycle_from_round "$round")"
+      review_loop::append_file_section "Validation Review" \
+        "$project_root/specs/reviews/validation/code-c${cycle}-review.md"
+      review_loop::append_file_section "Claude Triage Review" \
+        "$project_root/specs/reviews/validation/code-c${cycle}-claude-review.md"
+      if [[ "$round" == "c${cycle}f2" ]]; then
+        review_loop::append_file_section "Previous Claude Fix Review" \
+          "$project_root/specs/reviews/validation/code-c${cycle}f1-claude-review.md"
+        review_loop::append_file_section "Previous Fix Response" \
+          "$project_root/specs/reviews/validation/code-c${cycle}f1-codex-response.md"
+      fi
+      if [[ -n "$baseline_sha" ]]; then
+        review_loop::append_diff_section "Code Changes" "$baseline_sha"
+      fi
+      ;;
+    validation-design-fix)
+      local cycle
+      cycle="$(review_loop::validation_cycle_from_round "$round")"
+      review_loop::append_file_section "Validation Findings" \
+        "$project_root/specs/reviews/validation/design-c${cycle}-review.md"
+      review_loop::append_file_section "Claude Validation Response" \
+        "$project_root/specs/reviews/validation/design-c${cycle}-response.md"
+      if [[ "$round" == "c${cycle}f2" ]]; then
+        review_loop::append_file_section "Previous Fix Review" \
+          "$project_root/specs/reviews/validation/design-c${cycle}f1-codex-review.md"
       fi
       ;;
   esac

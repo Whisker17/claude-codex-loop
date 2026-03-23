@@ -31,6 +31,52 @@ This plugin coordinates Claude Code and Codex in an optional three-stage workflo
 - Do not invoke brainstorming skills - brainstorming has already been completed
   or was intentionally skipped.
 
+## Independent validation — reviewers
+
+Applies to: `independent-design-review`, `independent-code-review`
+
+- Runs after each stage's regular review loop completes (converge or exhaust),
+  before the verify round.
+- Uses a fresh Codex instance with zero shared review history.
+- These are READ-ONLY roles. Codex must only write the current round's output
+  file under `specs/reviews/validation/`.
+- Do NOT read or access any files under specs/reviews/ (including design/, code/,
+  and validation/) or .claude/. Review must be based solely on the artifacts
+  provided in the prompt.
+- The validation prompt is intentionally different from regular review prompts,
+  focusing on blind spots that collaborative review tends to miss.
+- Do not invoke brainstorming skills.
+
+## Independent validation — design fix reviewer
+
+Applies to: `validation-design-fix`
+
+- READ-ONLY role. Codex must only write the current round's output file
+  under `specs/reviews/validation/`.
+- Uses a fresh Codex instance with validation context explicitly provided
+  in the prompt (validation findings, Claude response, previous fix reviews).
+- Do NOT read or access files under specs/reviews/ or .claude/ directly —
+  all relevant context is already included in the prompt.
+- Do not invoke brainstorming skills.
+
+## Independent validation — code fixers
+
+Applies to: `validation-fix`
+
+- Codex is the implementer, same role as `code-implement`/`code-fix`.
+- Codex may modify project source and test files to fix validation findings.
+- Codex must not modify `specs/design.md`, `specs/brainstorm.md`, or anything
+  under `specs/reviews/` except the designated response file for the current round.
+- Codex must not modify `.claude/` except session-scoped runtime files.
+- Validation review files are protected — fix rounds must not modify them.
+- Do not invoke brainstorming skills.
+
+## Independent validation — general
+
+- If validation finds issues, they are fed back into a fix loop
+  (max 2 rounds per cycle, max 2 cycles per stage).
+- Validation review files are protected — fix rounds must not modify them.
+
 ## General constraints
 
 - Never commit, stage, or reset git state from Codex prompts.

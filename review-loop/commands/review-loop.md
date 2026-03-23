@@ -119,17 +119,65 @@ After the session branch is created and checked out:
    - Read `specs/reviews/design/round-<round>-codex-review.md`.
    - If there are no substantive issues, write `specs/reviews/design/round-<round>-claude-response.md` and stop the design loop.
    - Otherwise, update `specs/design.md` and write the matching Claude response file.
-3. If all 5 rounds were used and the last round changed `specs/design.md`, perform one final verification pass:
-   - Snapshot the worktree using the same `PRE_*` variables as regular design-review rounds.
-   - Execute `review-loop/scripts/run-review-bg.sh design-review verify`.
-   - Poll with `review-loop/scripts/check-review.sh`.
-   - Revert unauthorized file deltas using the same rollback and logging procedure as regular design-review rounds.
-   - The only allowed new file in this verify round is `specs/reviews/design/round-verify-codex-review.md`.
-   - Retry once on `TIMEOUT` or `FAILED`, then skip on a second failure.
-   - Read `specs/reviews/design/round-verify-codex-review.md`.
-   - Do NOT make further design edits regardless of findings.
-   - Write `specs/reviews/design/round-verify-claude-response.md`.
-4. Output exactly: `Design stage complete. Review specs/design.md and confirm.`
+## Design stage — independent validation
+
+After the regular design review loop completes (either by converging with no
+substantive issues, or by exhausting all 5 rounds):
+
+For each validation cycle from 1 to 2:
+  1. Snapshot the worktree (same `PRE_*` procedure as regular rounds).
+  2. Execute `review-loop/scripts/run-review-bg.sh independent-design-review c<cycle>`.
+  3. Poll with `review-loop/scripts/check-review.sh`.
+  4. Revert unauthorized file deltas. Allowed new file:
+     `specs/reviews/validation/design-c<cycle>-review.md`.
+  5. On `TIMEOUT` or `FAILED`: retry once, then skip this cycle on second failure.
+     Log the failure to `.claude/review-loop.log`.
+     Set `validation_skipped = true` for this stage.
+  6. If the review file does not exist after step 5, skip to next cycle.
+  7. Read `specs/reviews/validation/design-c<cycle>-review.md`.
+  8. If no substantive issues: validation passed, exit the validation loop.
+  9. If substantive issues found:
+     a. Claude updates `specs/design.md` to address the findings.
+     b. Claude writes `specs/reviews/validation/design-c<cycle>-response.md`.
+     c. Enter a fix review loop (max 2 rounds):
+        - Snapshot the worktree.
+        - Execute `run-review-bg.sh validation-design-fix c<cycle>f<fix-round>`.
+        - Poll with `check-review.sh`.
+        - On `TIMEOUT` or `FAILED`: retry once, then skip this fix round on second failure.
+          Log the failure. Treat unresolved fix rounds as unresolved validation findings.
+        - Revert unauthorized file deltas. Allowed new file:
+          `specs/reviews/validation/design-c<cycle>f<fix-round>-codex-review.md`.
+        - If the review file does not exist, treat fix loop as converged (best-effort).
+        - Read the review. If no substantive issues: fix loop converges.
+        - Otherwise Claude updates `specs/design.md` and continues.
+     d. Continue to the next validation cycle.
+
+If 2 validation cycles complete and the last cycle still had substantive issues,
+set `unresolved_validation = true`.
+
+## Design stage — verify round
+
+Verify round trigger: run if (regular loop used all 5 rounds AND last round
+changed design) OR (any validation cycle changed design).
+
+If triggered:
+  - Snapshot the worktree (same `PRE_*` procedure).
+  - Execute `run-review-bg.sh design-review verify`.
+  - Poll with `check-review.sh`.
+  - Revert unauthorized file deltas. Allowed new file:
+    `specs/reviews/design/round-verify-codex-review.md`.
+  - Retry once on `TIMEOUT` or `FAILED`, then skip on second failure.
+  - Read `specs/reviews/design/round-verify-codex-review.md`.
+  - Do NOT make further design edits regardless of findings.
+  - Write `specs/reviews/design/round-verify-claude-response.md`.
+
+## Design stage — terminal output
+
+If `unresolved_validation` OR `validation_skipped`:
+  Output exactly: `Design stage complete with unresolved validation findings.
+  Review specs/design.md and specs/reviews/validation/ before confirming.`
+Otherwise:
+  Output exactly: `Design stage complete. Review specs/design.md and confirm.`
 
 Wait for the user before entering the code stage.
 
@@ -139,10 +187,11 @@ After confirmation:
 
 1. If `brainstorm_done: true` AND `specs/brainstorm.md` exists: `git add specs/brainstorm.md`
 2. `git add specs/design.md specs/reviews/design/ .claude/review-loop.log`
-3. `git commit -m "review-loop: design stage complete (<session-id>)"`
-4. Record `HEAD` as `baseline_sha` in `.claude/review-loop.local.md`.
-5. Switch the state phase to `code`.
-6. If the commit fails for any reason other than `nothing to commit`, stop and ask the user to resolve the git issue manually.
+3. If `specs/reviews/validation/` exists (directory): `git add specs/reviews/validation/`
+4. `git commit -m "review-loop: design stage complete (<session-id>)"`
+5. Record `HEAD` as `baseline_sha` in `.claude/review-loop.local.md`.
+6. Switch the state phase to `code`.
+7. If the commit fails for any reason other than `nothing to commit`, stop and ask the user to resolve the git issue manually.
 
 ## Code stage
 
@@ -172,11 +221,68 @@ all prior review history and review as if seeing the code for the first time.
    - Revert unauthorized changes to protected paths
      - Allowed for `code-fix`: project source and test files, `.claude/review-loop-<session-id>.*`, and `specs/reviews/code/round-<round>-codex-response.md`
    - Read `specs/reviews/code/round-<round>-codex-response.md`
-6. If all 5 review rounds are exhausted and the last round required code changes, perform one final review-only verification pass:
-   - Write `specs/reviews/code/round-verify-claude-review.md` with a full independent review of the diff and no reference to prior rounds.
-   - This is the final artifact. Do NOT invoke Codex or perform additional iterations.
-   - There is no `code-fix verify` invocation in this workflow.
-7. Output exactly: `Implementation complete. All changes on branch review-loop/<session-id>.`
+## Code stage — independent validation
+
+After the regular code review loop completes (either by converging with no
+substantive issues, or by exhausting all 5 rounds):
+
+For each validation cycle from 1 to 2:
+  1. Snapshot the worktree (same `PRE_*` procedure as regular rounds).
+  2. Execute `review-loop/scripts/run-review-bg.sh independent-code-review c<cycle>`.
+  3. Poll with `review-loop/scripts/check-review.sh`.
+  4. Revert unauthorized file deltas. Allowed new file:
+     `specs/reviews/validation/code-c<cycle>-review.md`.
+  5. On `TIMEOUT` or `FAILED`: retry once, then skip this cycle on second failure.
+     Log the failure. Set `validation_skipped = true`.
+  6. If the review file does not exist after step 5, skip to next cycle.
+  7. Read `specs/reviews/validation/code-c<cycle>-review.md`.
+  8. If no substantive issues: validation passed, exit the validation loop.
+  9. If substantive issues found:
+     a. Claude writes `specs/reviews/validation/code-c<cycle>-claude-review.md`
+        triaging which issues require fixes.
+     b. Enter a fix loop (max 2 rounds):
+        - Snapshot the worktree.
+        - Execute `run-review-bg.sh validation-fix c<cycle>f<fix-round>`.
+        - Poll with `check-review.sh`.
+        - On `TIMEOUT` or `FAILED`: retry once, then skip this fix round on second failure.
+          Log the failure. Treat unresolved fix rounds as unresolved validation findings.
+        - Revert unauthorized changes to protected paths.
+          Allowed: project source + test files,
+          `specs/reviews/validation/code-c<cycle>f<fix-round>-codex-response.md`.
+        - If the response file does not exist, treat fix loop as converged (best-effort).
+        - Read the Codex response.
+        - Claude writes `specs/reviews/validation/code-c<cycle>f<fix-round>-claude-review.md`
+          reviewing the full diff. This review becomes the authoritative context for
+          the next fix round - it supersedes the initial triage for directing Codex.
+        - If no substantive issues: fix loop converges.
+        - Otherwise continue.
+     c. Continue to the next validation cycle.
+
+If 2 validation cycles complete and the last cycle still had issues,
+set `unresolved_validation = true`.
+
+## Code stage — verify round
+
+Verify round trigger: run if (regular loop used all 5 rounds AND last round
+required code changes) OR (any validation cycle required code changes).
+
+If triggered:
+  - Write `specs/reviews/code/round-verify-claude-review.md` with a full
+    independent review of the diff and no reference to prior rounds.
+  - This is a Claude-only review. Do NOT invoke Codex or perform additional iterations.
+
+## Code stage — terminal output
+
+If `unresolved_validation` OR `validation_skipped`:
+  Output exactly: `Implementation complete with unresolved validation findings.
+  Review specs/reviews/validation/ for details.
+  All changes on branch review-loop/<session-id>.`
+Otherwise:
+  Output exactly: `Implementation complete. All changes on branch review-loop/<session-id>.`
+
+## Protected paths
+
+Validation review files (`specs/reviews/validation/*-review.md` and `specs/reviews/validation/*-claude-review.md`) are protected during fix rounds. Only the designated output file for the current round is allowed.
 
 ## Final cleanup
 

@@ -74,13 +74,13 @@ assert_executable() {
 assert_contains() {
   local path="$1"
   local needle="$2"
-  grep -Fq "$needle" "$path" || fail "expected [$needle] in $path"
+  grep -Fq -- "$needle" "$path" || fail "expected [$needle] in $path"
 }
 
 assert_not_contains() {
   local path="$1"
   local needle="$2"
-  if grep -Fq "$needle" "$path"; then
+  if grep -Fq -- "$needle" "$path"; then
     fail "did not expect [$needle] in $path"
   fi
 }
@@ -94,7 +94,7 @@ assert_contains_in_order() {
   local line
 
   for needle in "$@"; do
-    line="$(grep -Fn "$needle" "$path" | head -n 1 | cut -d: -f1)"
+    line="$(grep -Fn -- "$needle" "$path" | head -n 1 | cut -d: -f1)"
     [[ -n "$line" ]] || fail "expected [$needle] in $path" || return 1
     if (( line <= last_line )); then
       fail "expected [$needle] after line $last_line in $path"
@@ -133,15 +133,44 @@ write_file() {
   printf '%s' "$content" > "$path"
 }
 
+write_state_file() {
+  local project_root="$1"
+  local phase="${2:-design}"
+  local baseline_sha="${3:-}"
+  local task="${4:-Implement review loop}"
+  local session_id="${5:-test-session}"
+  local baseline_line='baseline_sha: ""'
+
+  if [[ -n "$baseline_sha" ]]; then
+    baseline_line="baseline_sha: $baseline_sha"
+  fi
+
+  cat > "$project_root/.claude/review-loop.local.md" <<EOF
+---
+active: true
+session_id: $session_id
+phase: $phase
+round: 1
+started_at: 2026-03-20T00:00:00Z
+branch: review-loop/$session_id
+start_branch: main
+start_sha: abc123
+$baseline_line
+brainstorm_done: false
+task: "$task"
+---
+EOF
+}
+
 setup_project() {
   local tmp_root
   tmp_root="$(make_tmpdir)"
 
   local project_root="$tmp_root/project"
-  mkdir -p "$project_root/.claude" "$project_root/specs/reviews/design" "$project_root/specs/reviews/code"
+  mkdir -p "$project_root/.claude" "$project_root/specs/reviews/design" "$project_root/specs/reviews/code" "$project_root/specs/reviews/validation"
 
   write_file "$project_root/specs/design.md" $'# Design\n\nReview loop design content.\n'
-  write_file "$project_root/.claude/review-loop.local.md" $'---\nactive: true\nsession_id: test-session\nphase: design\nround: 1\nstarted_at: 2026-03-20T00:00:00Z\nbranch: review-loop/test-session\nstart_branch: main\nstart_sha: abc123\nbaseline_sha: ""\nbrainstorm_done: false\ntask: "Implement review loop"\n---\n'
+  write_state_file "$project_root"
 
   printf '%s\n' "$project_root"
 }
@@ -253,6 +282,10 @@ test_required_files_exist() {
     "$REPO_ROOT/review-loop/prompts/design-review.md"
     "$REPO_ROOT/review-loop/prompts/code-implement.md"
     "$REPO_ROOT/review-loop/prompts/code-fix.md"
+    "$REPO_ROOT/review-loop/prompts/independent-design-review.md"
+    "$REPO_ROOT/review-loop/prompts/independent-code-review.md"
+    "$REPO_ROOT/review-loop/prompts/validation-fix.md"
+    "$REPO_ROOT/review-loop/prompts/validation-design-fix.md"
     "$REPO_ROOT/review-loop/commands/review-loop.md"
     "$REPO_ROOT/review-loop/commands/cancel-review.md"
     "$REPO_ROOT/review-loop/hooks/hooks.json"
@@ -285,6 +318,20 @@ build_prompt_to_file() {
   ) || return 1
 }
 
+append_diff_section_to_file() {
+  local project_root="$1"
+  local title="$2"
+  local baseline_sha="$3"
+  local output_path="$4"
+
+  (
+    cd "$project_root" || exit 1
+    REVIEW_LOOP_PROJECT_ROOT="$project_root"
+    source "$REPO_ROOT/review-loop/scripts/common.sh"
+    review_loop::append_diff_section "$title" "$baseline_sha" > "$output_path"
+  ) || return 1
+}
+
 test_review_command_documents_v21_flow() {
   local path="$REPO_ROOT/review-loop/commands/review-loop.md"
   assert_file_exists "$path" || return 1
@@ -292,18 +339,28 @@ test_review_command_documents_v21_flow() {
   assert_contains "$path" "description: Drive the review-loop v2.1 design and code collaboration flow" || return 1
   assert_contains "$path" "## Brainstorming (optional)" || return 1
   assert_contains "$path" "brainstorm_done: true" || return 1
+  assert_contains "$path" "## Design stage — independent validation" || return 1
+  assert_contains "$path" "run-review-bg.sh independent-design-review c<cycle>" || return 1
   assert_contains "$path" "run-review-bg.sh design-review verify" || return 1
   assert_contains "$path" "round-verify-codex-review.md" || return 1
   assert_contains "$path" "round-verify-claude-review.md" || return 1
+  assert_contains "$path" "## Code stage — independent validation" || return 1
+  assert_contains "$path" "run-review-bg.sh independent-code-review c<cycle>" || return 1
+  assert_contains "$path" "run-review-bg.sh validation-fix c<cycle>f<fix-round>" || return 1
+  assert_contains "$path" "run-review-bg.sh validation-design-fix c<cycle>f<fix-round>" || return 1
   assert_contains "$path" "phase: design    # design | code | done" || return 1
   assert_contains "$path" "start_branch: main" || return 1
   assert_contains "$path" "brainstorm_done: false" || return 1
+  assert_contains "$path" "Design stage complete with unresolved validation findings." || return 1
   assert_contains "$path" "Design stage complete. Review specs/design.md and confirm." || return 1
+  assert_contains "$path" "Implementation complete with unresolved validation findings." || return 1
   assert_contains "$path" "Implementation complete. All changes on branch review-loop/" || return 1
   assert_contains "$path" "run-review-bg.sh" || return 1
   assert_contains "$path" "check-review.sh" || return 1
   assert_contains "$path" "git add specs/brainstorm.md" || return 1
+  assert_contains "$path" 'If `specs/reviews/validation/` exists (directory): `git add specs/reviews/validation/`' || return 1
   assert_contains "$path" "git add -A -- ':!specs/reviews/' ':!specs/brainstorm.md' ':!.claude/'" || return 1
+  assert_contains "$path" 'Validation review files (`specs/reviews/validation/*-review.md` and `specs/reviews/validation/*-claude-review.md`) are protected during fix rounds.' || return 1
 }
 
 test_cancel_command_restores_starting_point_and_hook_stays_cleanup_only() {
@@ -335,6 +392,10 @@ test_prompts_and_agents_document_v21_constraints() {
   local design_prompt="$REPO_ROOT/review-loop/prompts/design-review.md"
   local code_implement_prompt="$REPO_ROOT/review-loop/prompts/code-implement.md"
   local code_fix_prompt="$REPO_ROOT/review-loop/prompts/code-fix.md"
+  local independent_design_prompt="$REPO_ROOT/review-loop/prompts/independent-design-review.md"
+  local independent_code_prompt="$REPO_ROOT/review-loop/prompts/independent-code-review.md"
+  local validation_fix_prompt="$REPO_ROOT/review-loop/prompts/validation-fix.md"
+  local validation_design_fix_prompt="$REPO_ROOT/review-loop/prompts/validation-design-fix.md"
   local agents_path="$REPO_ROOT/review-loop/AGENTS.md"
 
   assert_contains "$design_prompt" "CRITICAL: Every round is a full audit." || return 1
@@ -342,10 +403,245 @@ test_prompts_and_agents_document_v21_constraints() {
   assert_contains "$design_prompt" "For verify rounds (no prior context): report all findings as fresh" || return 1
   assert_contains "$code_implement_prompt" "Do not invoke brainstorming skills." || return 1
   assert_contains "$code_fix_prompt" "Do not invoke brainstorming skills." || return 1
+  assert_contains "$independent_design_prompt" "Role: Independent design validator (READ-ONLY role)" || return 1
+  assert_contains "$independent_design_prompt" "Do NOT read or access any files under specs/reviews/" || return 1
+  assert_contains "$independent_code_prompt" "Role: Independent code validator (READ-ONLY role)" || return 1
+  assert_contains "$independent_code_prompt" "code diff, and task description provided in this prompt." || return 1
+  assert_contains "$validation_fix_prompt" "These issues were found by an independent reviewer" || return 1
+  assert_contains "$validation_fix_prompt" "Do not invoke brainstorming skills" || return 1
+  assert_contains "$validation_design_fix_prompt" 'Separate "validation issues (now fixed/still open)" from "newly identified" issues' || return 1
+  assert_contains "$validation_design_fix_prompt" "Do NOT read or access any files under specs/reviews/design/" || return 1
+  assert_contains "$validation_design_fix_prompt" "Do NOT read specs/reviews/validation/ files directly" || return 1
   assert_contains "$agents_path" "optional three-stage workflow" || return 1
   assert_contains "$agents_path" "## Brainstorming stage (optional)" || return 1
   assert_contains "$agents_path" "Verify rounds receive no prior review context to ensure fresh perspective." || return 1
   assert_contains "$agents_path" "Final verification is Claude-only (no Codex invocation)." || return 1
+  assert_contains "$agents_path" "## Independent validation" || return 1
+  assert_contains "$agents_path" "Runs after each stage's regular review loop completes (converge or exhaust)," || return 1
+  assert_contains "$agents_path" "Do NOT read or access any files under specs/reviews/" || return 1
+}
+
+test_independent_design_review_prompt_no_review_history() {
+  local project_root
+  local prompt_path
+
+  project_root="$(setup_project)"
+  prompt_path="$project_root/.claude/independent-design-c1.md"
+
+  write_file "$project_root/specs/reviews/design/round-1-codex-review.md" $'Leaked design review context.\n'
+  write_file "$project_root/specs/reviews/design/round-1-claude-response.md" $'Leaked design response context.\n'
+  write_file "$project_root/specs/reviews/validation/design-c1-review.md" $'Leaked validation review context.\n'
+  write_file "$project_root/specs/reviews/validation/code-c1-review.md" $'Leaked validation code context.\n'
+
+  build_prompt_to_file "$project_root" independent-design-review c1 "$prompt_path" || return 1
+
+  assert_not_contains "$prompt_path" "Leaked design review context." || return 1
+  assert_not_contains "$prompt_path" "Leaked design response context." || return 1
+  assert_not_contains "$prompt_path" "Leaked validation review context." || return 1
+  assert_not_contains "$prompt_path" "Leaked validation code context." || return 1
+  assert_not_contains "$prompt_path" "## Previous Codex Review" || return 1
+  assert_not_contains "$prompt_path" "## Previous Claude Response" || return 1
+}
+
+test_independent_design_review_prompt_includes_design_and_task() {
+  local project_root
+  local prompt_path
+
+  project_root="$(setup_project)"
+  prompt_path="$project_root/.claude/independent-design-c1.md"
+  write_state_file "$project_root" design "" "Validate design blind spots"
+
+  build_prompt_to_file "$project_root" independent-design-review c1 "$prompt_path" || return 1
+
+  assert_contains "$prompt_path" "Review loop design content." || return 1
+  assert_contains "$prompt_path" "- Task: Validate design blind spots" || return 1
+  assert_contains "$prompt_path" "specs/reviews/validation/design-c1-review.md" || return 1
+}
+
+test_independent_code_review_prompt_includes_diff() {
+  local project_root
+  local prompt_path
+  local baseline_sha
+
+  project_root="$(setup_git_project)" || return 1
+  prompt_path="$project_root/.claude/independent-code-c1.md"
+
+  (
+    cd "$project_root" || exit 1
+    mkdir -p src
+    printf 'before\n' > src/app.sh
+    git add src/app.sh
+    git commit -q -m "add app file"
+  ) || return 1
+
+  baseline_sha="$(
+    cd "$project_root" || exit 1
+    git rev-parse HEAD
+  )" || return 1
+
+  (
+    cd "$project_root" || exit 1
+    printf 'after\n' > src/app.sh
+    mkdir -p tests
+    printf 'new validation case\n' > tests/new-validation.txt
+  ) || return 1
+
+  write_state_file "$project_root" code "$baseline_sha" "Validate implementation blind spots"
+  build_prompt_to_file "$project_root" independent-code-review c1 "$prompt_path" || return 1
+
+  assert_contains "$prompt_path" "## Code Changes" || return 1
+  assert_contains "$prompt_path" "diff --git a/src/app.sh b/src/app.sh" || return 1
+  assert_contains "$prompt_path" "diff --git a/tests/new-validation.txt b/tests/new-validation.txt" || return 1
+  assert_contains "$prompt_path" "specs/reviews/validation/code-c1-review.md" || return 1
+}
+
+test_independent_code_review_prompt_no_review_history() {
+  local project_root
+  local prompt_path
+  local baseline_sha
+
+  project_root="$(setup_git_project)" || return 1
+  prompt_path="$project_root/.claude/independent-code-c1.md"
+
+  (
+    cd "$project_root" || exit 1
+    mkdir -p src
+    printf 'before\n' > src/app.sh
+    git add src/app.sh
+    git commit -q -m "add app file"
+  ) || return 1
+
+  baseline_sha="$(
+    cd "$project_root" || exit 1
+    git rev-parse HEAD
+  )" || return 1
+
+  (
+    cd "$project_root" || exit 1
+    printf 'after\n' > src/app.sh
+  ) || return 1
+
+  write_state_file "$project_root" code "$baseline_sha"
+  write_file "$project_root/specs/reviews/code/round-1-claude-review.md" $'Leaked code review context.\n'
+  write_file "$project_root/specs/reviews/code/round-1-codex-response.md" $'Leaked code response context.\n'
+  write_file "$project_root/specs/reviews/validation/code-c1-review.md" $'Leaked validation review context.\n'
+
+  build_prompt_to_file "$project_root" independent-code-review c1 "$prompt_path" || return 1
+
+  assert_not_contains "$prompt_path" "Leaked code review context." || return 1
+  assert_not_contains "$prompt_path" "Leaked code response context." || return 1
+  assert_not_contains "$prompt_path" "Leaked validation review context." || return 1
+  assert_not_contains "$prompt_path" "## Current Claude Review" || return 1
+}
+
+test_validation_fix_prompt_includes_validation_and_triage() {
+  local project_root
+  local prompt_path
+
+  project_root="$(setup_project)"
+  prompt_path="$project_root/.claude/validation-fix-c1f1.md"
+
+  write_file "$project_root/specs/reviews/validation/code-c1-review.md" $'Validation review content.\n'
+  write_file "$project_root/specs/reviews/validation/code-c1-claude-review.md" $'Claude triage content.\n'
+
+  build_prompt_to_file "$project_root" validation-fix c1f1 "$prompt_path" || return 1
+
+  assert_contains "$prompt_path" "Validation review content." || return 1
+  assert_contains "$prompt_path" "Claude triage content." || return 1
+  assert_contains "$prompt_path" "specs/reviews/validation/code-c1f1-codex-response.md" || return 1
+}
+
+test_validation_fix_prompt_round_2_includes_previous_response() {
+  local project_root
+  local prompt_path
+
+  project_root="$(setup_project)"
+  prompt_path="$project_root/.claude/validation-fix-c1f2.md"
+
+  write_file "$project_root/specs/reviews/validation/code-c1-review.md" $'Validation review content.\n'
+  write_file "$project_root/specs/reviews/validation/code-c1-claude-review.md" $'Claude triage content.\n'
+  write_file "$project_root/specs/reviews/validation/code-c1f1-claude-review.md" $'Previous Claude fix review.\n'
+  write_file "$project_root/specs/reviews/validation/code-c1f1-codex-response.md" $'Previous fix response.\n'
+
+  build_prompt_to_file "$project_root" validation-fix c1f2 "$prompt_path" || return 1
+
+  assert_contains "$prompt_path" "Previous Claude fix review." || return 1
+  assert_contains "$prompt_path" "Previous fix response." || return 1
+}
+
+test_validation_design_fix_prompt_includes_validation_findings() {
+  local project_root
+  local prompt_path
+
+  project_root="$(setup_project)"
+  prompt_path="$project_root/.claude/validation-design-fix-c1f1.md"
+
+  write_file "$project_root/specs/reviews/validation/design-c1-review.md" $'Validation findings content.\n'
+  write_file "$project_root/specs/reviews/validation/design-c1-response.md" $'Claude validation response.\n'
+
+  build_prompt_to_file "$project_root" validation-design-fix c1f1 "$prompt_path" || return 1
+
+  assert_contains "$prompt_path" "Validation findings content." || return 1
+  assert_contains "$prompt_path" "specs/reviews/validation/design-c1f1-codex-review.md" || return 1
+}
+
+test_validation_design_fix_prompt_includes_claude_response() {
+  local project_root
+  local prompt_path
+
+  project_root="$(setup_project)"
+  prompt_path="$project_root/.claude/validation-design-fix-c1f1.md"
+
+  write_file "$project_root/specs/reviews/validation/design-c1-review.md" $'Validation findings content.\n'
+  write_file "$project_root/specs/reviews/validation/design-c1-response.md" $'Claude validation response.\n'
+
+  build_prompt_to_file "$project_root" validation-design-fix c1f1 "$prompt_path" || return 1
+
+  assert_contains "$prompt_path" "Claude validation response." || return 1
+}
+
+test_validation_output_paths() {
+  local project_root
+
+  project_root="$(setup_project)"
+
+  (
+    cd "$project_root" || exit 1
+    REVIEW_LOOP_PROJECT_ROOT="$project_root"
+    source "$REPO_ROOT/review-loop/scripts/common.sh"
+    assert_equals "specs/reviews/validation/design-c1-review.md" "$(review_loop::expected_output_path independent-design-review c1)" || return 1
+    assert_equals "specs/reviews/validation/code-c2-review.md" "$(review_loop::expected_output_path independent-code-review c2)" || return 1
+    assert_equals "specs/reviews/validation/code-c1f1-codex-response.md" "$(review_loop::expected_output_path validation-fix c1f1)" || return 1
+    assert_equals "specs/reviews/validation/design-c2f2-codex-review.md" "$(review_loop::expected_output_path validation-design-fix c2f2)" || return 1
+  ) || return 1
+}
+
+test_validate_round_accepts_validation_tokens() {
+  local project_root
+  local round
+  local output
+  local status
+
+  project_root="$(setup_project)"
+
+  (
+    cd "$project_root" || exit 1
+    REVIEW_LOOP_PROJECT_ROOT="$project_root"
+    source "$REPO_ROOT/review-loop/scripts/common.sh"
+
+    for round in c1 c2 c1f1 c1f2 c2f1 c2f2; do
+      review_loop::validate_round "$round" || fail "expected round [$round] to be accepted" || return 1
+    done
+
+    for round in c3 c1f3 c0; do
+      set +e
+      output="$(review_loop::validate_round "$round" 2>&1)"
+      status=$?
+      set -e
+      [[ $status -eq 1 ]] || fail "expected round [$round] to be rejected" || return 1
+      [[ "$output" == "Unsupported round: $round" ]] || fail "unexpected rejection output for [$round]: $output" || return 1
+    done
+  ) || return 1
 }
 
 test_run_review_bg_design_review_injects_context() {
@@ -383,6 +679,36 @@ test_run_review_bg_design_review_injects_context() {
   assert_contains "$prompt_capture" "Round 1 review." || return 1
   assert_contains "$prompt_capture" "Round 1 response." || return 1
   assert_contains "$prompt_capture" "specs/reviews/design/round-2-codex-review.md" || return 1
+}
+
+test_run_review_bg_independent_design_review() {
+  local project_root
+  local fake_bin
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
+  local sentinel
+  local prompt_capture
+  local output_path
+
+  assert_file_exists "$script_path" || return 1
+  project_root="$(setup_project)"
+  write_file "$project_root/specs/reviews/design/round-1-codex-review.md" $'Leaked design review context.\n'
+  write_file "$project_root/specs/reviews/validation/design-c2-review.md" $'Leaked validation review context.\n'
+  fake_bin="$(install_fake_codex "$(dirname "$project_root")")"
+  sentinel="$project_root/.claude/review-loop-test-session.sentinel"
+  prompt_capture="$project_root/.claude/fake-codex-prompt.txt"
+  output_path="$project_root/specs/reviews/validation/design-c1-review.md"
+
+  (
+    cd "$project_root" || exit 1
+    PATH="$fake_bin:$PATH" "$script_path" independent-design-review c1
+  ) || return 1
+
+  wait_for_file_content "$sentinel" "done" || return 1
+  assert_file_exists "$output_path" || return 1
+  assert_contains "$prompt_capture" "Review loop design content." || return 1
+  assert_contains "$prompt_capture" "specs/reviews/validation/design-c1-review.md" || return 1
+  assert_not_contains "$prompt_capture" "Leaked design review context." || return 1
+  assert_not_contains "$prompt_capture" "Leaked validation review context." || return 1
 }
 
 test_run_review_bg_precreates_output_directory_and_discovers_project_root() {
@@ -516,6 +842,182 @@ test_run_review_bg_code_implement_uses_design_only() {
   assert_not_contains "$prompt_capture" "Should not be injected." || return 1
 }
 
+test_run_review_bg_validation_fix() {
+  local project_root
+  local fake_bin
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
+  local sentinel
+  local prompt_capture
+  local output_path
+
+  assert_file_exists "$script_path" || return 1
+  project_root="$(setup_project)"
+  write_file "$project_root/specs/reviews/validation/code-c1-review.md" $'Validation review content.\n'
+  write_file "$project_root/specs/reviews/validation/code-c1-claude-review.md" $'Claude triage content.\n'
+  fake_bin="$(install_fake_codex "$(dirname "$project_root")")"
+  sentinel="$project_root/.claude/review-loop-test-session.sentinel"
+  prompt_capture="$project_root/.claude/fake-codex-prompt.txt"
+  output_path="$project_root/specs/reviews/validation/code-c1f1-codex-response.md"
+
+  (
+    cd "$project_root" || exit 1
+    PATH="$fake_bin:$PATH" "$script_path" validation-fix c1f1
+  ) || return 1
+
+  wait_for_file_content "$sentinel" "done" || return 1
+  assert_file_exists "$output_path" || return 1
+  assert_contains "$prompt_capture" "Validation review content." || return 1
+  assert_contains "$prompt_capture" "Claude triage content." || return 1
+}
+
+test_validation_skip_on_double_failure() {
+  local path="$REPO_ROOT/review-loop/commands/review-loop.md"
+
+  assert_contains "$path" "retry once, then skip this cycle on second failure." || return 1
+  assert_contains "$path" "retry once, then skip this fix round on second failure." || return 1
+  assert_contains "$path" 'Set `validation_skipped = true`' || return 1
+  assert_contains "$path" "Treat unresolved fix rounds as unresolved validation findings." || return 1
+}
+
+test_validation_cycle_2_uses_distinct_artifacts() {
+  local project_root
+  local prompt_path
+
+  project_root="$(setup_project)"
+  prompt_path="$project_root/.claude/independent-design-c2.md"
+  write_file "$project_root/specs/reviews/validation/design-c1-review.md" $'Cycle 1 validation review.\n'
+
+  build_prompt_to_file "$project_root" independent-design-review c2 "$prompt_path" || return 1
+
+  assert_contains "$prompt_path" "specs/reviews/validation/design-c2-review.md" || return 1
+  assert_not_contains "$prompt_path" "specs/reviews/validation/design-c1-review.md" || return 1
+  assert_not_contains "$prompt_path" "Cycle 1 validation review." || return 1
+}
+
+test_append_diff_section_includes_untracked_files() {
+  local project_root
+  local baseline_sha
+  local diff_path
+
+  project_root="$(setup_git_project)" || return 1
+  diff_path="$project_root/.claude/code-diff.md"
+
+  baseline_sha="$(
+    cd "$project_root" || exit 1
+    git rev-parse HEAD
+  )" || return 1
+
+  (
+    cd "$project_root" || exit 1
+    mkdir -p src
+    printf 'brand new\n' > src/new-file.txt
+  ) || return 1
+
+  append_diff_section_to_file "$project_root" "Code Changes" "$baseline_sha" "$diff_path" || return 1
+
+  assert_contains "$diff_path" "## Code Changes" || return 1
+  assert_contains "$diff_path" "diff --git a/src/new-file.txt b/src/new-file.txt" || return 1
+  assert_contains "$diff_path" "new file mode" || return 1
+}
+
+test_validation_fix_c2f1_prompt() {
+  local project_root
+  local prompt_path
+
+  project_root="$(setup_project)"
+  prompt_path="$project_root/.claude/validation-fix-c2f1.md"
+
+  write_file "$project_root/specs/reviews/validation/code-c1-review.md" $'Cycle 1 review.\n'
+  write_file "$project_root/specs/reviews/validation/code-c1-claude-review.md" $'Cycle 1 triage.\n'
+  write_file "$project_root/specs/reviews/validation/code-c2-review.md" $'Cycle 2 review.\n'
+  write_file "$project_root/specs/reviews/validation/code-c2-claude-review.md" $'Cycle 2 triage.\n'
+
+  build_prompt_to_file "$project_root" validation-fix c2f1 "$prompt_path" || return 1
+
+  assert_contains "$prompt_path" "Cycle 2 review." || return 1
+  assert_contains "$prompt_path" "Cycle 2 triage." || return 1
+  assert_not_contains "$prompt_path" "Cycle 1 review." || return 1
+  assert_not_contains "$prompt_path" "Cycle 1 triage." || return 1
+}
+
+test_run_review_bg_independent_code_review() {
+  local project_root
+  local fake_bin
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
+  local sentinel
+  local prompt_capture
+  local output_path
+  local baseline_sha
+
+  assert_file_exists "$script_path" || return 1
+  project_root="$(setup_git_project)" || return 1
+
+  (
+    cd "$project_root" || exit 1
+    mkdir -p src
+    printf 'before\n' > src/app.sh
+    git add src/app.sh
+    git commit -q -m "add app file"
+  ) || return 1
+
+  baseline_sha="$(
+    cd "$project_root" || exit 1
+    git rev-parse HEAD
+  )" || return 1
+
+  (
+    cd "$project_root" || exit 1
+    printf 'after\n' > src/app.sh
+    mkdir -p tests
+    printf 'new validation case\n' > tests/new-validation.txt
+  ) || return 1
+
+  write_state_file "$project_root" code "$baseline_sha"
+  fake_bin="$(install_fake_codex "$(dirname "$project_root")")"
+  sentinel="$project_root/.claude/review-loop-test-session.sentinel"
+  prompt_capture="$project_root/.claude/fake-codex-prompt.txt"
+  output_path="$project_root/specs/reviews/validation/code-c1-review.md"
+
+  (
+    cd "$project_root" || exit 1
+    PATH="$fake_bin:$PATH" "$script_path" independent-code-review c1
+  ) || return 1
+
+  wait_for_file_content "$sentinel" "done" || return 1
+  assert_file_exists "$output_path" || return 1
+  assert_contains "$prompt_capture" "## Code Changes" || return 1
+  assert_contains "$prompt_capture" "diff --git a/src/app.sh b/src/app.sh" || return 1
+  assert_contains "$prompt_capture" "diff --git a/tests/new-validation.txt b/tests/new-validation.txt" || return 1
+}
+
+test_run_review_bg_validation_design_fix() {
+  local project_root
+  local fake_bin
+  local script_path="$REPO_ROOT/review-loop/scripts/run-review-bg.sh"
+  local sentinel
+  local prompt_capture
+  local output_path
+
+  assert_file_exists "$script_path" || return 1
+  project_root="$(setup_project)"
+  write_file "$project_root/specs/reviews/validation/design-c1-review.md" $'Validation findings content.\n'
+  write_file "$project_root/specs/reviews/validation/design-c1-response.md" $'Claude validation response.\n'
+  fake_bin="$(install_fake_codex "$(dirname "$project_root")")"
+  sentinel="$project_root/.claude/review-loop-test-session.sentinel"
+  prompt_capture="$project_root/.claude/fake-codex-prompt.txt"
+  output_path="$project_root/specs/reviews/validation/design-c1f1-codex-review.md"
+
+  (
+    cd "$project_root" || exit 1
+    PATH="$fake_bin:$PATH" "$script_path" validation-design-fix c1f1
+  ) || return 1
+
+  wait_for_file_content "$sentinel" "done" || return 1
+  assert_file_exists "$output_path" || return 1
+  assert_contains "$prompt_capture" "Validation findings content." || return 1
+  assert_contains "$prompt_capture" "Claude validation response." || return 1
+}
+
 test_design_review_verify_prompt_no_prior_context() {
   local project_root
   local prompt_path
@@ -608,6 +1110,28 @@ test_check_review_reports_expected_statuses() {
 
   kill "$pid" >/dev/null 2>&1 || true
   wait "$pid" 2>/dev/null || true
+}
+
+test_check_review_with_validation_round_tokens() {
+  local project_root
+  local check_script="$REPO_ROOT/review-loop/scripts/check-review.sh"
+
+  assert_file_exists "$check_script" || return 1
+  project_root="$(setup_project)"
+
+  write_file "$project_root/specs/reviews/validation/design-c1-review.md" $'Validation review exists.\n'
+  write_file "$project_root/.claude/review-loop-test-session.sentinel" "done"
+  (
+    cd "$project_root" || exit 1
+    assert_exit_and_output 0 "DONE" "$check_script" test-session independent-design-review c1
+  ) || return 1
+
+  write_file "$project_root/specs/reviews/validation/code-c1f1-codex-response.md" $'Validation fix response exists.\n'
+  write_file "$project_root/.claude/review-loop-test-session.sentinel" "done"
+  (
+    cd "$project_root" || exit 1
+    assert_exit_and_output 0 "DONE" "$check_script" test-session validation-fix c1f1
+  ) || return 1
 }
 
 test_kill_review_terminates_session_and_cleans_runtime_files() {
@@ -772,16 +1296,35 @@ main() {
   run_test "review command documents v2.1 flow" test_review_command_documents_v21_flow
   run_test "cancel command restores the starting point and hook stays cleanup-only" test_cancel_command_restores_starting_point_and_hook_stays_cleanup_only
   run_test "prompts and agents document v2.1 constraints" test_prompts_and_agents_document_v21_constraints
+  run_test "independent design-review prompt excludes prior review history" test_independent_design_review_prompt_no_review_history
+  run_test "independent design-review prompt includes design and task" test_independent_design_review_prompt_includes_design_and_task
+  run_test "independent code-review prompt includes tracked and untracked diff changes" test_independent_code_review_prompt_includes_diff
+  run_test "independent code-review prompt excludes prior review history" test_independent_code_review_prompt_no_review_history
+  run_test "validation-fix prompt includes validation review and claude triage" test_validation_fix_prompt_includes_validation_and_triage
+  run_test "validation-fix round 2 prompt includes the previous fix artifacts" test_validation_fix_prompt_round_2_includes_previous_response
+  run_test "validation-design-fix prompt includes validation findings" test_validation_design_fix_prompt_includes_validation_findings
+  run_test "validation-design-fix prompt includes claude validation response" test_validation_design_fix_prompt_includes_claude_response
+  run_test "validation modes resolve the expected output paths" test_validation_output_paths
+  run_test "validation round tokens are accepted and invalid ones rejected" test_validate_round_accepts_validation_tokens
   run_test "run-review-bg injects context and writes artifacts" test_run_review_bg_design_review_injects_context
+  run_test "run-review-bg supports independent design validation" test_run_review_bg_independent_design_review
   run_test "run-review-bg discovers the project root and precreates output directories" test_run_review_bg_precreates_output_directory_and_discovers_project_root
   run_test "run-review-bg writes failed sentinel on codex errors" test_run_review_bg_writes_failed_sentinel_on_nonzero_exit
   run_test "run-review-bg fails fast when the launcher never writes a pid file" test_run_review_bg_fails_fast_when_launcher_never_writes_pid
   run_test "run-review-bg builds code-fix and verify prompts correctly" test_run_review_bg_code_fix_and_verify_contexts
   run_test "run-review-bg keeps code-implement context scoped to the design" test_run_review_bg_code_implement_uses_design_only
+  run_test "run-review-bg supports validation-fix prompts" test_run_review_bg_validation_fix
+  run_test "double validation failures are documented as skip-and-log behavior" test_validation_skip_on_double_failure
+  run_test "validation cycle 2 uses c2 artifact names" test_validation_cycle_2_uses_distinct_artifacts
+  run_test "append_diff_section includes untracked files" test_append_diff_section_includes_untracked_files
+  run_test "validation-fix c2f1 prompt reads cycle 2 artifacts" test_validation_fix_c2f1_prompt
+  run_test "run-review-bg supports independent code validation" test_run_review_bg_independent_code_review
+  run_test "run-review-bg supports validation-design-fix prompts" test_run_review_bg_validation_design_fix
   run_test "design-review verify prompt strips prior context" test_design_review_verify_prompt_no_prior_context
   run_test "design-review regular prompt keeps prior context" test_design_review_regular_prompt_includes_prior_context
   run_test "brainstorm output stays protected during code-stage staging" test_brainstorm_md_protected_in_code_stage_exclusions
   run_test "check-review returns running, timeout, failed, and done" test_check_review_reports_expected_statuses
+  run_test "check-review supports validation round tokens" test_check_review_with_validation_round_tokens
   run_test "kill-review stops the background session" test_kill_review_terminates_session_and_cleans_runtime_files
   run_test "kill-review --from-hook cleans state and prompt files" test_kill_review_from_hook_cleans_state_and_prompt_files
   run_test "smoke: design-review round completes in a real git repo" test_smoke_design_review_round_in_real_git_repo
