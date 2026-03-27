@@ -1,0 +1,1 @@
+Build a CLI calculator application in Python that supports: add, subtract, multiply, divide operations. It should accept two numbers and an operation from command line arguments, handle division by zero gracefully, validate that inputs are valid numbers, and print the result to stdout. Include unit tests.

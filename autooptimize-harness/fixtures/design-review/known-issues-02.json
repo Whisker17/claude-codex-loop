@@ -1,0 +1,30 @@
+{
+  "description": "Collaborative editor design with subtle consistency and scaling issues",
+  "known_issues": [
+    {
+      "id": "OT_TRANSFORM_ORDER_NONDETERMINISTIC",
+      "severity": "critical",
+      "description": "The tiebreaker for concurrent inserts at the same position uses 'lower user_id wins'. But user_id is a string, and string comparison of UUIDs or usernames gives arbitrary ordering. If two server instances process the same pair of operations but compare user_ids differently (e.g., locale-sensitive comparison), they will diverge. This breaks the fundamental OT convergence guarantee."
+    },
+    {
+      "id": "SNAPSHOT_REPLAY_GAP",
+      "severity": "high",
+      "description": "On server restart, the design replays operations since the last snapshot. But snapshots are taken every 100 operations. If the server crashes at operation 250 and the last snapshot is at operation 200, it replays ops 201-250. However, the design stores document content 'updated in-place after each operation', so the content field already reflects all 250 ops. Replaying 201-250 on top of the current content would apply them TWICE, corrupting the document."
+    },
+    {
+      "id": "REDIS_LOCK_VS_OT_ORDERING",
+      "severity": "high",
+      "description": "The design uses Redis SETNX for document-level locking to order operations across instances. But the OT transform step requires fetching intermediate operations, transforming, and applying — this is not atomic even with the lock. If instance A holds the lock, transforms, but crashes before releasing, the lock is held forever (no TTL mentioned on the SETNX lock). Other instances cannot process operations for that document."
+    },
+    {
+      "id": "SESSION_TTL_DATA_LOSS",
+      "severity": "medium",
+      "description": "Sessions in Redis have TTL=300s refreshed by heartbeat every 30s. But if a client's network is temporarily down for >300s (e.g., laptop sleep), the session expires and the user is removed. When the client reconnects, it gets a full sync, but any operations it sent during the outage that were queued locally will have stale base_versions. The design does not specify how to handle reconnection with buffered operations."
+    },
+    {
+      "id": "DELETE_LENGTH_VS_CONTENT_MISMATCH",
+      "severity": "medium",
+      "description": "The Operation model has both 'content' (empty for delete) and 'length' (for delete). But when transforming delete-vs-delete with overlapping ranges, the design says 'adjust length and position' without specifying what happens when two deletes partially overlap. The adjusted length could become negative or the position could exceed document length. No invariant validation is specified."
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "description": "Distributed task queue design with subtle issues",
+  "known_issues": [
+    {
+      "id": "PRIORITY_ORDER_INVERTED",
+      "severity": "high",
+      "description": "The spec says 'higher = more important' for priority, but the dequeue SQL uses ORDER BY priority ASC (implicit), which dequeues LOWEST priority first. Either the spec or the SQL is wrong — they contradict each other."
+    },
+    {
+      "id": "RETRY_ATTEMPTS_OFF_BY_ONE",
+      "severity": "high",
+      "description": "The dequeue increments attempts BEFORE the task runs. So a task with max_attempts=3 will be retried only 2 times: attempt 1 (first try), attempt 2 (retry 1), attempt 3 (retry 2 — but on failure, attempts=3 >= max_attempts=3, so it goes to dead letter). The backoff calculation uses the already-incremented attempts value, making the first retry use 2^1 instead of 2^0."
+    },
+    {
+      "id": "CRASH_RECOVERY_RACE",
+      "severity": "high",
+      "description": "The crash recovery sweeper resets tasks where locked_until < NOW() AND status = 'running' back to 'pending'. But if a worker is just slow (not crashed), the sweeper will reset a task that's actively being processed. When both the original worker and the new worker finish, the task gets executed twice. The design has no mechanism to detect this (no generation counter or CAS)."
+    },
+    {
+      "id": "SCHEDULER_DUPLICATE_WINDOW",
+      "severity": "medium",
+      "description": "The scheduler checks every 30 seconds and tracks last_run to prevent duplicates. But if the scheduler process restarts and loses in-memory last_run state, or if two scheduler instances run simultaneously (no leader election), duplicate tasks will be enqueued. The design does not specify where last_run is persisted or how scheduler exclusivity is enforced."
+    },
+    {
+      "id": "LOCK_EXPIRY_VS_TASK_DURATION",
+      "severity": "medium",
+      "description": "Lock duration is hardcoded to 5 minutes. Long-running tasks (e.g., the daily report) will have their lock expire while still running, triggering the crash recovery sweeper to reset the task. The design has no mechanism to extend locks or configure per-task lock duration."
+    }
+  ]
+}

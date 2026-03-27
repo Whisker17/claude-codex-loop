@@ -1,0 +1,30 @@
+{
+  "description": "API gateway design with subtle middleware ordering and consistency issues",
+  "known_issues": [
+    {
+      "id": "USAGE_TRACKING_COUNTS_CACHED",
+      "severity": "high",
+      "description": "The request flow shows ResponseCache BEFORE UsageTracker. Cache hits bypass the downstream call but still flow through UsageTracker on the response path. This means cached responses are counted as billable API calls. A tenant hitting cache 90% of the time pays for 100% of requests. The design doesn't distinguish between cache hits and actual downstream calls in billing."
+    },
+    {
+      "id": "RATE_LIMIT_OFF_BY_ONE",
+      "severity": "high",
+      "description": "The rate limiter adds the current request to the sorted set BEFORE checking the count (zadd then zcard). So the count includes the current request. The check is 'count <= limit', meaning it allows limit+1 requests: requests 1 through limit all pass (count=1..limit, all <= limit), and request limit+1 also passes (count=limit+1... wait, no: the zadd happens, then zcard returns count including it). Actually the issue is: zadd adds BEFORE zcard checks. If limit=100 and there are already 100 entries, zadd makes it 101, zcard returns 101, 101 <= 100 is false — correct. But the request was already ADDED to the set. The rejected request is counted in the window, shrinking the effective limit for the next window. Failed requests should be removed from the sorted set."
+    },
+    {
+      "id": "CACHE_INVALIDATION_TOO_BROAD",
+      "severity": "medium",
+      "description": "Cache invalidation triggers on 'any non-GET request to the same path prefix'. A POST to /api/users/123/avatar would invalidate the cache for /api/users/*, including unrelated cached entries for /api/users/456, /api/users?page=2, etc. This creates a cache stampede after any write operation, defeating the purpose of caching under write-heavy workloads."
+    },
+    {
+      "id": "CIRCUIT_BREAKER_SHARED_STATE",
+      "severity": "medium",
+      "description": "The circuit breaker tracks failure rate 'per downstream service' but the design doesn't specify whether this state is local to each gateway instance or shared in Redis. If local, each instance has its own view — one instance could have the circuit open while another has it closed. If shared, the Redis operations to track failure rate and check thresholds are not atomic, creating race conditions between instances."
+    },
+    {
+      "id": "AUTH_CACHE_STALE_PERMISSIONS",
+      "severity": "medium",
+      "description": "API key lookups are cached in Redis with TTL=60s. If a tenant's permissions are revoked or plan tier is changed, the cached entry serves stale permissions for up to 60 seconds. For security-sensitive revocations (compromised key), this means a revoked key remains valid for a minute. The design has no cache invalidation mechanism for auth entries."
+    }
+  ]
+}

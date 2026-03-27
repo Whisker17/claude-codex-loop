@@ -1,0 +1,29 @@
+{
+  "description": "Eval criteria for rate limiter implementation",
+  "criteria": [
+    {
+      "name": "thread_safety",
+      "question": "Does the code use threading.Lock (or equivalent) to protect shared state from concurrent access?"
+    },
+    {
+      "name": "sliding_window",
+      "question": "Does the code implement a sliding window algorithm (tracking individual request timestamps and pruning old ones) rather than a fixed window counter?"
+    },
+    {
+      "name": "retry_after_calculated",
+      "question": "Is the Retry-After header value calculated based on when the oldest request in the window expires, rather than being hardcoded?"
+    },
+    {
+      "name": "proxy_support",
+      "question": "Does the code read X-Forwarded-For header (or similar) to determine the real client IP behind proxies?"
+    },
+    {
+      "name": "health_exempt",
+      "question": "Is the /health endpoint exempt from rate limiting?"
+    },
+    {
+      "name": "tests_exist",
+      "question": "Does the code include test files with tests covering: basic rate limiting, exceeding the limit, and window expiry?"
+    }
+  ]
+}

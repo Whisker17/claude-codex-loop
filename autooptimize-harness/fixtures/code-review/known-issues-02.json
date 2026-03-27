@@ -1,0 +1,30 @@
+{
+  "description": "Event store with subtle state management and concurrency issues",
+  "known_issues": [
+    {
+      "id": "SNAPSHOT_STATE_NOT_PORTABLE",
+      "severity": "high",
+      "description": "The _rebuild_state method used for snapshots does a generic accumulation (counting event types and storing last event data). But get_state() uses a caller-provided apply_fn for state reconstruction. The snapshot state is built with _rebuild_state's logic, but get_state resumes from the snapshot and applies remaining events with apply_fn. The snapshot state shape won't match what apply_fn expects, causing incorrect state reconstruction after snapshot points."
+    },
+    {
+      "id": "GET_STATE_SNAPSHOT_NOT_COPIED",
+      "severity": "high",
+      "description": "get_state() reads snapshot.state and then mutates it by applying events via apply_fn. Since Python dicts are mutable, this modifies the snapshot's stored state in-place. The next call to get_state() with a different apply_fn (or even the same one) will see the already-mutated snapshot, producing wrong results. The snapshot state must be deep-copied before use."
+    },
+    {
+      "id": "HANDLER_FAILURE_SILENT",
+      "severity": "medium",
+      "description": "Event handlers are called outside the lock after append. If a handler raises an exception, it prevents subsequent handlers from being notified, and the exception propagates to the caller even though the events were successfully persisted. The caller may interpret this as a write failure and retry, creating duplicate events."
+    },
+    {
+      "id": "GET_LOCK_DOUBLE_CHECK_UNSAFE",
+      "severity": "medium",
+      "description": "The _get_lock double-checked locking pattern first checks 'if aggregate_id not in self._locks' without the lock, then re-checks inside. The first check reads self._locks without synchronization. In CPython this is safe due to the GIL, but the pattern is not thread-safe in general Python implementations and violates the spec's thread-safety requirement in a non-obvious way."
+    },
+    {
+      "id": "VERSION_CALCULATION_INCONSISTENT",
+      "severity": "medium",
+      "description": "Version is calculated as len(current_events) in append, but get_state returns start_version + len(events_after_snapshot). If events are appended concurrently to the same aggregate (different lock wouldn't help since it's per-aggregate), get_events could return events added after the version was read, making the returned version inconsistent with the actual state computed."
+    }
+  ]
+}

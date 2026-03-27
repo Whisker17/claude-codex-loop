@@ -1,0 +1,30 @@
+{
+  "description": "Connection pool with subtle concurrency and resource management bugs",
+  "known_issues": [
+    {
+      "id": "SIZE_TRACKING_RACE",
+      "severity": "critical",
+      "description": "In get_connection(), the check 'if self._size < self.max_size' and the increment 'self._size += 1' are inside the lock, but _create_connection() is called AFTER releasing the lock (it's inside the with block but returns immediately, then connect happens). Actually the real issue: in the 'while True' loop at the top, when a connection is invalid or idle-expired, _size is decremented under the lock, but the loop then tries to get another connection from the pool. If the pool is empty and _size was decremented, the code falls through to create a new connection. But between the decrement and the creation, another thread could also decrement _size and create a connection, potentially exceeding max_size because _size was artificially low."
+    },
+    {
+      "id": "RECURSIVE_GET_STACKOVERFLOW",
+      "severity": "high",
+      "description": "When waiting for a connection at max size and the returned connection fails validation, get_connection() calls itself recursively. Under sustained load with unhealthy connections, this recursion can exhaust the stack. Each recursive call also re-enters the 'at max size, wait' path, creating a chain of blocking recursive calls."
+    },
+    {
+      "id": "CLEAN_IDLE_DRAINS_POOL",
+      "severity": "high",
+      "description": "The _clean_idle method drains the entire pool queue into a local list, checks each connection, then puts survivors back. During this window, any thread calling get_connection() will see an empty pool and either create new connections (inflating _size beyond max) or block waiting. This creates periodic availability drops every 60 seconds."
+    },
+    {
+      "id": "MIN_SIZE_NOT_MAINTAINED",
+      "severity": "medium",
+      "description": "The spec requires min_size connections maintained. The idle cleaner and validation failures can close connections below min_size, but nothing recreates them. After enough idle timeouts, the pool can shrink to 0 connections with _size=0, losing the min_size guarantee."
+    },
+    {
+      "id": "CONTEXT_MANAGER_NO_COMMIT",
+      "severity": "medium",
+      "description": "The connection() context manager rolls back on exception but never commits on success. Callers who use 'with pool.connection() as conn' and perform writes will have their transactions silently rolled back when the context exits (psycopg2 rolls back uncommitted transactions on connection return to pool). This is a silent data loss bug."
+    }
+  ]
+}

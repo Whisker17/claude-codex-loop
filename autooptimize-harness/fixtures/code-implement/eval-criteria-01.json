@@ -1,0 +1,25 @@
+{
+  "description": "Eval criteria for CLI calculator implementation",
+  "criteria": [
+    {
+      "name": "code_exists",
+      "question": "Does the code include a main source file (e.g., calc.py) with a calculate function and CLI entry point?"
+    },
+    {
+      "name": "tests_exist",
+      "question": "Does the code include a test file with at least 4 test functions covering add, subtract, multiply, divide, and division by zero?"
+    },
+    {
+      "name": "division_by_zero",
+      "question": "Does the code handle division by zero gracefully (raising an exception with a message or printing an error) rather than crashing with an unhandled ZeroDivisionError?"
+    },
+    {
+      "name": "input_validation",
+      "question": "Does the code validate that inputs are valid numbers and handle invalid input gracefully?"
+    },
+    {
+      "name": "spec_conformance",
+      "question": "Does the code follow the spec's architecture: uses argparse, has a separate calculate() function, and has the file structure described (calc.py + test_calc.py)?"
+    }
+  ]
+}

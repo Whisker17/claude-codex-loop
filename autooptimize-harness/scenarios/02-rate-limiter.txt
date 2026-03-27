@@ -1,0 +1,1 @@
+Create a REST API rate limiter middleware in Python (using Flask or FastAPI). Implement a sliding window algorithm that limits each client IP to 100 requests per minute. Store rate limit state in memory. Return 429 Too Many Requests with a Retry-After header when the limit is exceeded. Include a simple test endpoint and tests that verify the rate limiting behavior.
