@@ -73,9 +73,9 @@ To cancel at any time:
 
 Cancellation discards all session work and restores the starting branch.
 
-### No marketplace publication required
+### Marketplace
 
-This plugin works locally — you do **not** need to publish it to any marketplace. Just point your project's `settings.json` to the plugin directory and it's ready to use.
+This plugin is available on the Claude Code plugin marketplace. You can also install it locally by pointing your project's `settings.json` to the plugin directory.
 
 ## Verification
 
@@ -85,7 +85,14 @@ Run:
 bash tests/review-loop.test.sh
 ```
 
-## v2.1 Changes
+## Version History
+
+### v2.3
+
+- **Independent validation round** — a separate validation pass after design and code stages
+- **Marketplace plugin manifest** — `.claude-plugin/plugin.json` for official publishing
+
+### v2.1
 
 - **Optional brainstorming stage** with user opt-in when `superpowers:brainstorming` is available
 - **Fresh independent reviews** — every review round mandates a full audit; verify rounds strip all prior context
@@ -93,7 +100,7 @@ bash tests/review-loop.test.sh
 - **Session-scoped brainstorming** — `brainstorm_done` flag prevents stale artifacts from bleeding across sessions
 - **Protected brainstorm artifacts** — `specs/brainstorm.md` excluded from code-stage staging and diffs
 
-See [`specs/2026-03-21-review-loop-v2.1-design.md`](specs/2026-03-21-review-loop-v2.1-design.md) for the original design spec and [`specs/design.md`](specs/design.md) for the refined implementation spec.
+See [`specs/design.md`](specs/design.md) for the current implementation spec.
 
 ## Runtime Notes
 

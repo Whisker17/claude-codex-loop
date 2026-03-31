@@ -165,7 +165,7 @@ Note: Round 1 starts from Claude Code's first review of Codex's initial implemen
 ### Plugin files
 
 ```
-plugins/review-loop/
+review-loop/
 ├── scripts/
 │   ├── run-review-bg.sh          # Background-launch Codex (audit or implement)
 │   ├── check-review.sh           # Poll sentinel, return status

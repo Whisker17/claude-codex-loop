@@ -1,7 +1,7 @@
 {
   "name": "claude-codex-loop",
   "description": "A Claude Code plugin that drives a collaboration loop between Claude Code and Codex — iterative design reviews followed by code reviews with independent audits each round.",
-  "version": "2.1.0",
+  "version": "2.3.1",
   "author": {
     "name": "Whisker17"
   },

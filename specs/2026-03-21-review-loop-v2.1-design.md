@@ -130,7 +130,7 @@ The final verification is marked as:
 ### Plugin files (unchanged from v2)
 
 ```
-plugins/review-loop/
+review-loop/
 ├── scripts/
 │   ├── run-review-bg.sh
 │   ├── check-review.sh
